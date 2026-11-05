@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Order & Rate Automation</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <button id="btnOut" class="hide">Log out</button>
+  <h1>Order & Rate Automation</h1><small id="who"></small>
+  <nav>
+    <button data-t="emps" class="hide">👥 Employees</button>
+    <button data-t="order">🛒 Order</button>
+    <button data-t="hist">📜 History</button>
+    <button data-t="back" class="hide">🔧 Backend</button>
+    <button data-t="set">⚙️ Settings</button>
+  </nav>
+</header>
+
+<main>
+  <!-- EMPLOYEES (admin) -->
+  <section id="tab-emps" class="hide">
+    <div class="panel mu">Tap an employee to import the CSV they sent you and see their orders.</div>
+    <div class="btns"><button class="btn" id="btnAddEmp">+ Add employee</button></div>
+    <div id="empList"></div>
+  </section>
+
+  <!-- ONE EMPLOYEE (admin) -->
+  <section id="tab-emp" class="hide">
+    <button class="btn l sm" id="btnEmpBack">← Employees</button>
+    <h2 id="empName"></h2>
+    <div class="chips" id="empChips">
+      <button data-r="today">Today</button><button data-r="week">This Week</button>
+      <button data-r="month">This Month</button><button data-r="all" class="on">All</button>
+    </div>
+    <div class="panel">
+      <div class="row"><span>Orders</span><b id="eCount">0</b></div>
+      <div class="row"><span>Total Qty</span><b id="eQty">0</b></div>
+      <div class="row"><span>Total Amount</span><b id="eAmt">0</b></div>
+      <div class="btns">
+        <button class="btn" id="btnImport">⬆️ Import CSV</button>
+        <button class="btn g" id="btnECsv">⬇️ Export CSV</button>
+        <button class="btn l" id="btnEShare">📤 Share</button>
+      </div>
+      <input type="file" id="fileImport" accept=".csv,.xlsx,.xls,text/csv" class="hide">
+    </div>
+    <div id="empOrders"></div>
+  </section>
+
+  <!-- ORDER -->
+  <section id="tab-order">
+    <label for="party">Purchasing party</label>
+    <input class="in" id="party" list="partyOpts" placeholder="Party name" autocomplete="off">
+    <div id="partyHint"></div>
+    <input class="search" id="search" placeholder="Filter product or series...">
+    <div id="list"></div>
+  </section>
+
+  <!-- HISTORY -->
+  <section id="tab-hist" class="hide">
+    <div class="chips" id="chips">
+      <button data-r="today" class="on">Today</button><button data-r="week">This Week</button>
+      <button data-r="month">This Month</button><button data-r="all">All</button>
+    </div>
+    <div class="panel">
+      <div class="row"><span>Orders</span><b id="hCount">0</b></div>
+      <div class="row"><span>Total Qty</span><b id="hQty">0</b></div>
+      <div class="row"><span>Total Amount</span><b id="hAmt">0</b></div>
+      <div class="btns">
+        <button class="btn g" id="btnCsv">⬇️ Export CSV</button>
+        <button class="btn" id="btnShareCsv">📤 Share CSV</button>
+      </div>
+    </div>
+    <div id="orders"></div>
+  </section>
+
+  <!-- BACKEND (admin, math check) -->
+  <section id="tab-back" class="hide">
+    <div class="panel mu">Changes save on this phone instantly. Net Rate is auto-calculated from PACK, MRP and Scheme unless you type a manual rate.</div>
+    <div id="backList"></div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section id="tab-set" class="hide">
+    <div class="panel">
+      <h3>Account</h3>
+      <p id="acctInfo" style="margin:0;font-size:13px"></p>
+    </div>
+
+    <div class="panel">
+      <h3>Purchasing Parties</h3>
+      <p class="mu" style="margin:0 0 8px">Saved names are suggested when you type, and mistyped names are corrected.</p>
+      <input class="in" id="newParty" placeholder="Add a party name">
+      <button class="btn" id="btnAddParty">Add Party</button>
+      <div id="partyList" style="margin-top:10px"></div>
+    </div>
+
+    <div class="panel adm hide">
+      <h3>Order Placing</h3>
+      <p class="mu" style="margin:0 0 8px">Hidden by default. Turn on if you want to place an order yourself.</p>
+      <button class="btn l" id="btnOrderMode">Show order placing UI</button>
+    </div>
+
+    <div class="panel adm hide">
+      <h3>Net Rate Bar</h3>
+      <p class="mu" style="margin:0 0 8px">Hidden every time the app opens or refreshes.</p>
+      <button class="btn l" id="btnNet">Show Net Rate Bar</button>
+    </div>
+
+    <div class="panel">
+      <h3>Backup & Restore</h3>
+      <p class="mu" style="margin:0 0 8px">Saves everything on this phone to a file. Do this regularly.</p>
+      <div class="btns">
+        <button class="btn g" id="btnBackup">💾 Backup</button>
+        <button class="btn l" id="btnRestore">♻️ Restore</button>
+      </div>
+      <input type="file" id="fileRestore" accept=".json,application/json" class="hide">
+    </div>
+
+    <div class="panel"><h3>Phone Check</h3><div id="checks"></div></div>
+    <div class="panel"><button class="btn r" id="btnWipe">🗑 Delete my saved orders</button></div>
+  </section>
+</main>
+
+<datalist id="partyOpts"></datalist>
+
+<!-- Login -->
+<div class="login hide" id="login"><div class="box">
+  <h2 id="lTitle"></h2>
+  <div id="lUserWrap"><label>Username</label><input class="in" id="lUser" autocapitalize="none" autocomplete="username"></div>
+  <label>Password</label><input class="in" type="password" id="lPass" autocomplete="current-password">
+  <div id="lPass2Wrap" class="hide"><label>Confirm password</label><input class="in" type="password" id="lPass2"></div>
+  <p class="err" id="lErr"></p>
+  <button class="btn" id="lGo" style="width:100%"></button>
+  <p class="c" style="font-size:13px;margin:12px 0 0"><a href="#" id="lLink1"></a></p>
+  <p class="c" style="font-size:13px;margin:6px 0 0"><a href="#" id="lLink2">Not you? Use another account</a></p>
+</div></div>
+
+<!-- Math check -->
+<div class="login modal hide" id="math"><div class="box">
+  <h3>Human check</h3>
+  <p class="mu" style="margin:0 0 10px">Solve this to open Backend editing:</p>
+  <div class="q-math" id="mQ"></div>
+  <input class="in c" type="number" inputmode="numeric" id="mA" placeholder="Answer">
+  <p class="err" id="mErr"></p>
+  <div class="btns"><button class="btn l" id="mCancel">Cancel</button><button class="btn" id="mOk">Verify</button></div>
+</div></div>
+
+<!-- Bottom summary bar -->
+<div class="bar hide" id="bar">
+  <div class="t" id="barTap"><small id="barSub">0 items · 0 qty · tap for details</small><b id="barTotal">₹0.00</b></div>
+  <button class="btn l" id="btnClear">Clear</button>
+  <button class="btn g" id="btnSave" disabled>Save Order</button>
+</div>
+
+<!-- Details sheet -->
+<div class="sheet hide" id="sheet">
+  <div class="panel big">
+    <div class="mu" style="color:#a5b4fc">TOTAL AMOUNT</div>
+    <div id="sLakhs" style="font-size:24px;font-weight:800">0.000000</div>
+    <div id="sRs" style="font-size:12px;color:#6ee7b7">₹0.00</div>
+  </div>
+  <h4>SERIES BREAKDOWN</h4><div id="sSeries"></div>
+  <h4>ORDERED ITEMS BREAKDOWN</h4><div id="sItems"></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
