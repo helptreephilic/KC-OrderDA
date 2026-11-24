@@ -132,7 +132,8 @@ async function ghUpdate(path,fn){
   }
 }
 async function refreshAccounts(){
-  try{const r=await ghGet("accounts.json");if(r){store.accounts=r.data;saveStore();}}catch(e){}
+  try{const r=await ghGet("accounts.json");if(r){store.accounts=r.data;saveStore();return "ok";}return "missing";}
+  catch(e){return e.message;}
 }
 const syncSoon=()=>{clearTimeout(syncTimer);syncTimer=setTimeout(sync,4000);};
 function setSync(m){$("syncInfo").textContent=m;if(curTab==="set")renderSettings();}
@@ -528,6 +529,7 @@ function setMode(m){
   $("lUserWrap").classList.toggle("hide",m!=="login");
   $("lPassWrap").classList.toggle("hide",m==="code");
   $("lCodeWrap").classList.toggle("hide",m!=="code");
+  $("lKeyWrap").classList.toggle("hide",m==="code"||!!cfg);$("lKey").value="";
   $("lTitle").textContent=m==="unlock"?"Welcome back, "+last:m==="code"?"Access key":"Log in";
   $("lGo").textContent=m==="code"?"Save code":m==="unlock"?"Unlock":"Log in";
   $("lErr").textContent="";$("lPass").value="";$("lCode").value="";
@@ -546,13 +548,22 @@ async function doLogin(){
   const u=mode==="unlock"?sGet("ora_last",""):$("lUser").value.trim().toLowerCase();
   const pw=$("lPass").value;
   if(!u||!pw)return err("Enter username and password");
+  const kv=$("lKey").value.trim();
+  if(kv){if(kv.length<20||/\s/.test(kv))return err("That access key is not valid");sSet("ora_key",kv);cfg={r:GH_REPO,t:kv};}
   if(u===ADMIN_USER){if(H("ora|"+u+"|"+pw)!==ADMIN_H)return err("Wrong password");return start(u,true);}
   if(!cfg)return err("First enter the access key from your uncle");
   $("lGo").disabled=true;
-  if(navigator.onLine)await refreshAccounts();
+  let why="ok";
+  if(cfg.r.startsWith("YOUR-"))why="repo name not set in app.js";
+  else if(navigator.onLine)why=await refreshAccounts();
   $("lGo").disabled=false;
   const a=(store.accounts.users||{})[u];
-  if(!a)return err(navigator.onLine?"No such account. Ask your uncle to create it.":"Offline. Connect to the internet for the first login.");
+  if(!a){
+    if(!navigator.onLine)return err("Offline. Connect to the internet for the first login.");
+    if(why==="missing")return err("No accounts uploaded yet. Ask your uncle to open his app while online, then try again.");
+    if(why!=="ok"){$("lKeyWrap").classList.remove("hide");return err("Cannot reach the data repo ("+why+"). Re-enter the access key above, or check the repo name.");}
+    return err("No such account. Ask your uncle to create it.");
+  }
   if(H(a.s+"|"+u+"|"+pw)!==a.h)return err("Wrong password");
   start(u,false);
 }
