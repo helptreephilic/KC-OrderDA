@@ -38,7 +38,8 @@ const prune=a=>a.filter(o=>o.ts>Date.now()-KEEP);
 const GH_REPO="helptreephilic/KC-OrderData";  // your PRIVATE data repository (owner/name)
 const GH_TOKEN="";                              // leave empty (safer): each phone gets the access key once at login
 let cfg=GH_TOKEN?{r:GH_REPO,t:GH_TOKEN}:(sGet("ora_key","")?{r:GH_REPO,t:sGet("ora_key","")}:null);
-let store=sGet("ora_store",null)||{accounts:{users:{},towns:{}},prices:null,orders:{},pending:[],del:[],dirty:{}};
+let store=sGet("ora_store",null)||{accounts:{users:{},towns:{}},prices:null,orders:{},pending:[],del:[],dirty:{},dirtyT:{}};
+store.dirtyT=store.dirtyT||{};
 let employee="", isAdmin=false, unlocked=false, expected=0, mode="login", showNet=false, curTab="order", curEmp="";
 let histRange="today", empRange="all", emsRange="month", sumRange="month";
 let sumEmp="", sumTown="", sumParty="";
@@ -137,7 +138,7 @@ async function refreshAccounts(){
 }
 const syncSoon=()=>{clearTimeout(syncTimer);syncTimer=setTimeout(sync,4000);};
 function setSync(m){$("syncInfo").textContent=m;if(curTab==="set")renderSettings();}
-const waiting=()=>store.pending.length+store.del.length+(store.dirty.acc?1:0)+(store.dirty.prc?1:0);
+const waiting=()=>store.pending.length+store.del.length+(store.dirty.acc?1:0)+(store.dirty.prc?1:0)+Object.keys(store.dirtyT).length;
 
 async function sync(){
   if(!employee)return;
@@ -154,6 +155,7 @@ async function sync(){
     // 2. admin pushes accounts / prices
     if(isAdmin&&store.dirty.acc){await ghUpdate("accounts.json",()=>store.accounts);delete store.dirty.acc;}
     if(isAdmin&&store.dirty.prc){await ghUpdate("prices.json",()=>store.prices||{});delete store.dirty.prc;}
+    for(const ow of Object.keys(store.dirtyT)){await ghUpdate("towns/"+ow+".json",()=>store.towns[ow]||{});delete store.dirtyT[ow];}
     // 3. push new / deleted orders
     const owners=[...new Set([...store.pending.map(x=>x.owner),...store.del.map(x=>x.owner)])];
     for(const ow of owners){
@@ -171,6 +173,7 @@ async function sync(){
     // 4. pull orders (admin: everyone, employee: own)
     const who=isAdmin?[ADMIN_USER,...Object.keys(store.accounts.users||{})]:[employee];
     for(const ow of who){
+      if(!store.dirtyT[ow]){const t=await ghGet("towns/"+ow+".json");if(t)store.towns[ow]=t.data;else if(Object.keys(townsMap(ow)).length)store.dirtyT[ow]=true;}
       const r=await ghGet("orders/"+ow+".json");
       if(r)store.orders[ow]=prune(r.data).sort((a,b)=>b.ts-a.ts);
     }
@@ -201,19 +204,20 @@ const histList=()=>scope().filter(o=>inRange(o,histRange));
 const empList_=()=>(store.orders[curEmp]||[]).map(o=>(o.owner=curEmp,o)).filter(o=>inRange(o,empRange));
 
 /* ===================== TOWNS & PARTIES ===================== */
-function townsMap(ow){const a=store.accounts;a.towns=a.towns||{};return a.towns[ow]=a.towns[ow]||{};}
+function townsMap(ow){store.towns=store.towns||{};return store.towns[ow]=store.towns[ow]||{};}
+function touchTowns(ow){store.dirtyT[ow]=true;saveStore();renderTownsAll();renderTP();syncSoon();}
 function touchAcc(){store.dirty.acc=true;saveStore();renderTownsAll();renderOrdFor();renderTP();syncSoon();}
 function addTown(ow){
   const n=cleanName(prompt("Town name:")||"");if(!n)return;
   const t=townsMap(ow);
   if(Object.keys(t).some(k=>k.toLowerCase()===n.toLowerCase())){toast("Town already exists");return;}
-  t[n]=[];touchAcc();
+  t[n]=[];touchTowns(ow);
 }
 function addPartyTo(ow,town){
   const n=cleanName(prompt("New party in "+town+":")||"");if(!n)return;
   const arr=townsMap(ow)[town];
   if(arr.some(p=>p.toLowerCase()===n.toLowerCase())){toast("Party already added");return;}
-  arr.push(n);touchAcc();
+  arr.push(n);touchTowns(ow);
 }
 function townsHtml(ow){
   const t=townsMap(ow),names=Object.keys(t).sort();
@@ -222,21 +226,44 @@ function townsHtml(ow){
     ${t[n].map(p=>`<div class="row"><span>🏪 ${esc(p)}</span><button class="x" data-dp="${esc(n)}" data-pp="${esc(p)}">✕</button></div>`).join("")||'<p class="mu">No parties yet.</p>'}</div>`).join(""):'<p class="mu">No towns yet.</p>';
 }
 function renderTownsAll(){
-  if(!isAdmin)return;
-  if(curEmp&&$("townList"))$("townList").innerHTML=townsHtml(curEmp);
-  $("myTownList").innerHTML=townsHtml(ADMIN_USER);
+  if(!employee)return;
+  if(isAdmin&&curEmp)$("townList").innerHTML=townsHtml(curEmp);
+  $("myTownList").innerHTML=townsHtml(employee);
 }
 function townClick(getOwner){
   return e=>{
     const d=e.target.dataset,ow=getOwner();if(!ow)return;
     if(d.ap)addPartyTo(ow,d.ap);
-    else if(d.dt){if(confirm(`Remove town "${d.dt}" and its parties?`)){delete townsMap(ow)[d.dt];touchAcc();}}
-    else if(d.dp){const a=townsMap(ow)[d.dp];a.splice(a.indexOf(d.pp),1);touchAcc();}
+    else if(d.dt){if(confirm(`Remove town "${d.dt}" and its parties?`)){delete townsMap(ow)[d.dt];touchTowns(ow);}}
+    else if(d.dp){const a=townsMap(ow)[d.dp];a.splice(a.indexOf(d.pp),1);touchTowns(ow);}
   };
 }
 
 /* ===================== ORDER TAB ===================== */
 const curOwner=()=>isAdmin?($("ordFor").value||ADMIN_USER):employee;
+function lev(a,b){
+  const m=[];
+  for(let i=0;i<=a.length;i++)m[i]=[i];
+  for(let j=1;j<=b.length;j++)m[0][j]=j;
+  for(let i=1;i<=a.length;i++)for(let j=1;j<=b.length;j++)
+    m[i][j]=Math.min(m[i-1][j]+1,m[i][j-1]+1,m[i-1][j-1]+(a[i-1]===b[j-1]?0:1));
+  return m[a.length][b.length];
+}
+function closest(name,list){
+  const k=name.toLowerCase();let best=null,bd=99;
+  list.forEach(p=>{const d=lev(k,p.toLowerCase());if(d<bd){bd=d;best=p;}});
+  return(best&&bd>0&&bd<=Math.max(2,Math.floor(k.length*.3)))?best:null;
+}
+// returns the final name (existing, corrected or new), or null if empty
+function resolveName(raw,list,label){
+  const n=cleanName(raw);
+  if(!n){toast("Enter the "+label);return null;}
+  const ex=list.find(p=>p.toLowerCase()===n.toLowerCase());
+  if(ex)return ex;
+  const s=closest(n,list);
+  if(s&&confirm(`Did you mean "${s}"?\n\nOK = use "${s}"\nCancel = add "${n}" as a new ${label}`))return s;
+  return n;
+}
 function renderOrdFor(){
   if(!isAdmin)return;
   const sel=$("ordFor"),cur=sel.value;
@@ -244,15 +271,13 @@ function renderOrdFor(){
   if(cur&&[...sel.options].some(o=>o.value===cur))sel.value=cur;
 }
 function renderTP(){
-  const names=Object.keys(townsMap(curOwner())).sort(),keep=$("town").value;
-  $("town").innerHTML='<option value="">Select town</option>'+names.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join("");
-  if(names.includes(keep))$("town").value=keep;
+  const names=Object.keys(townsMap(curOwner())).sort();
+  $("townOpts").innerHTML=names.map(n=>`<option value="${esc(n)}">`).join("");
   renderParty();
 }
 function renderParty(){
-  const ps=(townsMap(curOwner())[$("town").value]||[]).slice().sort(),keep=$("party").value;
-  $("party").innerHTML='<option value="">Select party</option>'+ps.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join("");
-  if(ps.includes(keep))$("party").value=keep;
+  const t=townsMap(curOwner()),k=Object.keys(t).find(x=>x.toLowerCase()===cleanName($("town").value).toLowerCase());
+  $("partyOpts").innerHTML=(k?t[k].slice().sort():[]).map(n=>`<option value="${esc(n)}">`).join("");
 }
 function renderList(){
   const q=$("search").value.trim().toLowerCase();
@@ -296,9 +321,9 @@ function updateSummary(){
   $("sItems").innerHTML=items.length?items.map(i=>`<div class="row"><span>${esc(i[0])} × ${i[1]}</span><b>${i[2].toFixed(5)}</b></div>`).join(""):'<p class="mu">Enter quantities...</p>';
 }
 function saveOrder(){
-  const ow=curOwner(),town=$("town").value,party=$("party").value;
-  if(!town){toast("Select the town");return;}
-  if(!party){toast("Select the purchasing party");return;}
+  const ow=curOwner(),tm=townsMap(ow);
+  const town=resolveName($("town").value,Object.keys(tm),"town");if(!town)return;
+  const party=resolveName($("party").value,tm[town]||[],"party");if(!party)return;
   const lines=[];let total=0,qty=0;
   products.forEach(p=>{
     if(p.qty>0){
@@ -312,10 +337,14 @@ function saveOrder(){
   const order={id:"O"+now.getTime().toString(36)+Math.random().toString(36).slice(2,5),ts:now.getTime(),owner:ow,employee:ow,by:employee,town,party,lines,qty,total};
   (store.orders[ow]=store.orders[ow]||[]).unshift(order);
   store.pending.push({owner:ow,id:order.id});
+  let ch=false;                                   // new town / party typed on the order page is added to the data
+  if(!tm[town]){tm[town]=[];ch=true;}
+  if(!tm[town].includes(party)){tm[town].push(party);ch=true;}
+  if(ch)store.dirtyT[ow]=true;
   saveStore();
   products.forEach(p=>p.qty=0);
   $("party").value="";$("sheet").classList.add("hide");
-  renderList();toast("✅ Order saved");
+  renderList();renderTP();renderTownsAll();toast("✅ Order saved");
   sync();
 }
 
@@ -555,7 +584,7 @@ async function doLogin(){
     if(!cfg)return err("Enter the access key above so the app can save accounts to the data repo");
     return start(u,true);
   }
-  if(!cfg)return err("First enter the access key from your uncle");
+  if(!cfg)return err("First enter the access key from your admin");
   $("lGo").disabled=true;
   let why="ok";
   if(cfg.r.startsWith("YOUR-"))why="repo name not set in app.js";
@@ -564,9 +593,9 @@ async function doLogin(){
   const a=(store.accounts.users||{})[u];
   if(!a){
     if(!navigator.onLine)return err("Offline. Connect to the internet for the first login.");
-    if(why==="missing")return err("No accounts uploaded yet. Ask your uncle to open his app while online, then try again.");
+    if(why==="missing")return err("No accounts uploaded yet. Ask your admin to open the app while online, then try again.");
     if(why!=="ok"){$("lKeyWrap").classList.remove("hide");return err("Cannot reach the data repo ("+why+"). Re-enter the access key above, or check the repo name.");}
-    return err("No such account. Ask your uncle to create it.");
+    return err("No such account. Ask your admin to create it.");
   }
   if(H(a.s+"|"+u+"|"+pw)!==a.h)return err("Wrong password");
   start(u,false);
@@ -580,6 +609,11 @@ function start(u,adm){
   sumEmp=adm?"":u;sumTown="";sumParty="";
   sSet("ora_last",u);
   Object.keys(store.orders).forEach(k=>store.orders[k]=prune(store.orders[k]));
+  if(!store.towns){            // first run of this version: move towns out of accounts.json
+    store.towns={};const old=store.accounts.towns||{};
+    Object.keys(old).forEach(o=>{if(adm||o===u){store.towns[o]=old[o];if(adm)store.dirtyT[o]=true;}});
+    saveStore();
+  }
   applyPrices();
   products.forEach(p=>p.qty=0);
   $("btnNet").textContent="Show Net Rate Bar";
@@ -672,8 +706,8 @@ document.addEventListener("DOMContentLoaded",()=>{
   $("btnOut").onclick=logout;
 
   // order tab
-  $("ordFor").onchange=()=>{$("town").value="";renderTP();};
-  $("town").onchange=()=>{$("party").value="";renderParty();};
+  $("ordFor").onchange=()=>{$("town").value="";$("party").value="";renderTP();};
+  $("town").oninput=renderParty;
   $("search").oninput=renderList;
   $("list").addEventListener("input",e=>{if(e.target.classList.contains("q"))setQty(+e.target.dataset.id,e.target.value);});
   $("barTap").onclick=()=>$("sheet").classList.toggle("hide");
@@ -706,8 +740,8 @@ document.addEventListener("DOMContentLoaded",()=>{
   $("btnEShare").onclick=()=>shareFile(csvPack(empList_(),curEmp+"_"+empRange));
   $("btnAddTown").onclick=()=>addTown(curEmp);
   $("townList").onclick=townClick(()=>curEmp);
-  $("btnAddMyTown").onclick=()=>addTown(ADMIN_USER);
-  $("myTownList").onclick=townClick(()=>ADMIN_USER);
+  $("btnAddMyTown").onclick=()=>addTown(employee);
+  $("myTownList").onclick=townClick(()=>employee);
   $("btnResetPw").onclick=resetPw;
   $("btnRemoveEmp").onclick=removeEmp;
 
@@ -749,6 +783,6 @@ document.addEventListener("DOMContentLoaded",()=>{
 
   window.addEventListener("online",()=>sync());
   document.addEventListener("visibilitychange",()=>{if(!document.hidden)sync();});
-  (function loop(){setTimeout(()=>{if(employee)sync();loop();},isAdmin?45000:120000);})();
+  (function loop(){setTimeout(()=>{if(employee)sync();loop();},isAdmin?60000:120000);})();
   if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().catch(()=>{});
 });
