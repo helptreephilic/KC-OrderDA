@@ -65,9 +65,10 @@
   <section id="tab-order">
     <div class="adm hide"><label for="ordFor">Place order for</label><select class="in" id="ordFor"></select></div>
     <label for="town">Town</label>
-    <select class="in" id="town"></select>
+    <input class="in" id="town" list="townOpts" placeholder="Type or pick a town" autocomplete="off">
     <label for="party">Purchasing party</label>
-    <select class="in" id="party"></select>
+    <input class="in" id="party" list="partyOpts" placeholder="Type or pick a party" autocomplete="off">
+    <datalist id="townOpts"></datalist><datalist id="partyOpts"></datalist>
     <input class="search" id="search" placeholder="Filter product or series...">
     <div id="list"></div>
   </section>
@@ -117,9 +118,9 @@
       <p id="syncLine" style="margin:0 0 8px;font-size:13px"></p>
     </div>
 
-    <div class="panel adm hide">
+    <div class="panel">
       <h3>My towns & parties</h3>
-      <p class="mu" style="margin:0 0 8px">Used when you place an order as "Myself".</p>
+      <p class="mu" style="margin:0 0 8px">You can also just type a new town or party on the Order page, and it is saved here automatically.</p>
       <div id="myTownList"></div>
       <button class="btn" id="btnAddMyTown">+ Add town</button>
     </div>
@@ -139,8 +140,8 @@
   <h2 id="lTitle"></h2>
   <div id="lUserWrap"><label>Username</label><input class="in" id="lUser" autocapitalize="none" autocomplete="username"></div>
   <div id="lPassWrap"><label>Password</label><input class="in" type="password" id="lPass" autocomplete="current-password"></div>
-  <div id="lKeyWrap" class="hide"><label>Access key (first time only)</label><input class="in" id="lKey" autocapitalize="none" autocomplete="off" placeholder="Paste the key your uncle gave you"></div>
-  <div id="lCodeWrap" class="hide"><label>Access key (from your uncle)</label><textarea class="in" id="lCode" rows="3"></textarea></div>
+  <div id="lKeyWrap" class="hide"><label>Access key (first time only)</label><input class="in" id="lKey" autocapitalize="none" autocomplete="off" placeholder="Paste the key your admin gave you"></div>
+  <div id="lCodeWrap" class="hide"><label>Access key (from your admin)</label><textarea class="in" id="lCode" rows="3"></textarea></div>
   <p class="err" id="lErr"></p>
   <button class="btn" id="lGo" style="width:100%"></button>
   <p class="c" style="font-size:13px;margin:12px 0 0"><a href="#" id="lLink1"></a></p>
