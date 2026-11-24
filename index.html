@@ -10,11 +10,12 @@
 
 <header>
   <button id="btnOut" class="hide">Log out</button>
-  <h1>Order & Rate Automation</h1><small id="who"></small>
+  <h1>Order & Rate Automation</h1><small id="who"></small><small id="syncInfo"></small>
   <nav>
     <button data-t="emps" class="hide">👥 Employees</button>
     <button data-t="order">🛒 Order</button>
     <button data-t="hist">📜 History</button>
+    <button data-t="sum">📊 Summary</button>
     <button data-t="back" class="hide">🔧 Backend</button>
     <button data-t="set">⚙️ Settings</button>
   </nav>
@@ -23,8 +24,12 @@
 <main>
   <!-- EMPLOYEES (admin) -->
   <section id="tab-emps" class="hide">
-    <div class="panel mu">Tap an employee to import the CSV they sent you and see their orders.</div>
-    <div class="btns"><button class="btn" id="btnAddEmp">+ Add employee</button></div>
+    <div class="chips" id="emsChips"></div>
+    <div class="btns">
+      <button class="btn" id="btnAddEmp">+ Add employee</button>
+      <button class="btn g" id="btnTotals">⬇️ Totals CSV</button>
+      <button class="btn l" id="btnTotalsShare">📤 Share totals</button>
+    </div>
     <div id="empList"></div>
   </section>
 
@@ -32,10 +37,7 @@
   <section id="tab-emp" class="hide">
     <button class="btn l sm" id="btnEmpBack">← Employees</button>
     <h2 id="empName"></h2>
-    <div class="chips" id="empChips">
-      <button data-r="today">Today</button><button data-r="week">This Week</button>
-      <button data-r="month">This Month</button><button data-r="all" class="on">All</button>
-    </div>
+    <div class="chips" id="empChips"></div>
     <div class="panel">
       <div class="row"><span>Orders</span><b id="eCount">0</b></div>
       <div class="row"><span>Total Qty</span><b id="eQty">0</b></div>
@@ -45,26 +47,34 @@
         <button class="btn g" id="btnECsv">⬇️ Export CSV</button>
         <button class="btn l" id="btnEShare">📤 Share</button>
       </div>
-      <input type="file" id="fileImport" accept=".csv,.xlsx,.xls,text/csv" class="hide">
+    </div>
+    <div class="panel">
+      <h3>Towns & Parties</h3>
+      <p class="mu" style="margin:0 0 8px">This employee can only order for the towns and parties listed here.</p>
+      <div id="townList"></div>
+      <button class="btn" id="btnAddTown">+ Add town</button>
+    </div>
+    <div class="btns">
+      <button class="btn l" id="btnResetPw">🔑 Reset password</button>
+      <button class="btn r" id="btnRemoveEmp">Remove employee</button>
     </div>
     <div id="empOrders"></div>
   </section>
 
   <!-- ORDER -->
   <section id="tab-order">
+    <div class="adm hide"><label for="ordFor">Place order for</label><select class="in" id="ordFor"></select></div>
+    <label for="town">Town</label>
+    <select class="in" id="town"></select>
     <label for="party">Purchasing party</label>
-    <input class="in" id="party" list="partyOpts" placeholder="Party name" autocomplete="off">
-    <div id="partyHint"></div>
+    <select class="in" id="party"></select>
     <input class="search" id="search" placeholder="Filter product or series...">
     <div id="list"></div>
   </section>
 
   <!-- HISTORY -->
   <section id="tab-hist" class="hide">
-    <div class="chips" id="chips">
-      <button data-r="today" class="on">Today</button><button data-r="week">This Week</button>
-      <button data-r="month">This Month</button><button data-r="all">All</button>
-    </div>
+    <div class="chips" id="chips"></div>
     <div class="panel">
       <div class="row"><span>Orders</span><b id="hCount">0</b></div>
       <div class="row"><span>Total Qty</span><b id="hQty">0</b></div>
@@ -77,9 +87,21 @@
     <div id="orders"></div>
   </section>
 
+  <!-- SUMMARY -->
+  <section id="tab-sum" class="hide">
+    <div class="chips" id="sChips"></div>
+    <div class="panel">
+      <div class="row"><span id="uPath"></span><button class="btn l sm" id="btnUBack">← Back</button></div>
+      <div class="row"><span>Orders</span><b id="uCount">0</b></div>
+      <div class="row"><span>Total Qty</span><b id="uQty">0</b></div>
+      <div class="row"><span>Total Amount</span><b id="uAmt">0</b></div>
+    </div>
+    <div id="uList"></div>
+  </section>
+
   <!-- BACKEND (admin, math check) -->
   <section id="tab-back" class="hide">
-    <div class="panel mu">Changes save on this phone instantly. Net Rate is auto-calculated from PACK, MRP and Scheme unless you type a manual rate.</div>
+    <div class="panel mu">Changes save on this phone and are sent to everyone's app when you are online. Net Rate is auto-calculated from PACK, MRP and Scheme unless you type a manual rate.</div>
     <div id="backList"></div>
   </section>
 
@@ -91,17 +113,15 @@
     </div>
 
     <div class="panel">
-      <h3>Purchasing Parties</h3>
-      <p class="mu" style="margin:0 0 8px">Saved names are suggested when you type, and mistyped names are corrected.</p>
-      <input class="in" id="newParty" placeholder="Add a party name">
-      <button class="btn" id="btnAddParty">Add Party</button>
-      <div id="partyList" style="margin-top:10px"></div>
+      <h3>Sync</h3>
+      <p id="syncLine" style="margin:0 0 8px;font-size:13px"></p>
     </div>
 
     <div class="panel adm hide">
-      <h3>Order Placing</h3>
-      <p class="mu" style="margin:0 0 8px">Hidden by default. Turn on if you want to place an order yourself.</p>
-      <button class="btn l" id="btnOrderMode">Show order placing UI</button>
+      <h3>My towns & parties</h3>
+      <p class="mu" style="margin:0 0 8px">Used when you place an order as "Myself".</p>
+      <div id="myTownList"></div>
+      <button class="btn" id="btnAddMyTown">+ Add town</button>
     </div>
 
     <div class="panel adm hide">
@@ -110,29 +130,16 @@
       <button class="btn l" id="btnNet">Show Net Rate Bar</button>
     </div>
 
-    <div class="panel">
-      <h3>Backup & Restore</h3>
-      <p class="mu" style="margin:0 0 8px">Saves everything on this phone to a file. Do this regularly.</p>
-      <div class="btns">
-        <button class="btn g" id="btnBackup">💾 Backup</button>
-        <button class="btn l" id="btnRestore">♻️ Restore</button>
-      </div>
-      <input type="file" id="fileRestore" accept=".json,application/json" class="hide">
-    </div>
-
     <div class="panel"><h3>Phone Check</h3><div id="checks"></div></div>
-    <div class="panel"><button class="btn r" id="btnWipe">🗑 Delete my saved orders</button></div>
   </section>
 </main>
-
-<datalist id="partyOpts"></datalist>
 
 <!-- Login -->
 <div class="login hide" id="login"><div class="box">
   <h2 id="lTitle"></h2>
   <div id="lUserWrap"><label>Username</label><input class="in" id="lUser" autocapitalize="none" autocomplete="username"></div>
-  <label>Password</label><input class="in" type="password" id="lPass" autocomplete="current-password">
-  <div id="lPass2Wrap" class="hide"><label>Confirm password</label><input class="in" type="password" id="lPass2"></div>
+  <div id="lPassWrap"><label>Password</label><input class="in" type="password" id="lPass" autocomplete="current-password"></div>
+  <div id="lCodeWrap" class="hide"><label>Access key (from your uncle)</label><textarea class="in" id="lCode" rows="3"></textarea></div>
   <p class="err" id="lErr"></p>
   <button class="btn" id="lGo" style="width:100%"></button>
   <p class="c" style="font-size:13px;margin:12px 0 0"><a href="#" id="lLink1"></a></p>
@@ -149,6 +156,31 @@
   <div class="btns"><button class="btn l" id="mCancel">Cancel</button><button class="btn" id="mOk">Verify</button></div>
 </div></div>
 
+<!-- Export / share fallback -->
+<div class="login modal hide" id="out"><div class="box">
+  <h3 id="outTitle">Your file</h3>
+  <textarea class="in" id="outText" rows="6" readonly></textarea>
+  <div class="btns">
+    <button class="btn g" id="outDl">⬇️ Download</button>
+    <button class="btn" id="outShare">📤 Share</button>
+    <button class="btn l" id="outCopy">📋 Copy</button>
+    <button class="btn l" id="outClose">Close</button>
+  </div>
+  <p class="mu">If Download does nothing on your phone, use Share or Copy and paste it into WhatsApp.</p>
+</div></div>
+
+<!-- Import -->
+<div class="login modal hide" id="imp"><div class="box">
+  <h3>Import orders (CSV)</h3>
+  <textarea class="in" id="impText" rows="6" placeholder="Paste the CSV text here, or choose a file"></textarea>
+  <input type="file" id="fileImport" class="hide">
+  <div class="btns">
+    <button class="btn l" id="impFile">📁 Choose file</button>
+    <button class="btn g" id="impGo">Import</button>
+    <button class="btn l" id="impClose">Cancel</button>
+  </div>
+</div></div>
+
 <!-- Bottom summary bar -->
 <div class="bar hide" id="bar">
   <div class="t" id="barTap"><small id="barSub">0 items · 0 qty · tap for details</small><b id="barTotal">₹0.00</b></div>
@@ -158,6 +190,7 @@
 
 <!-- Details sheet -->
 <div class="sheet hide" id="sheet">
+  <div class="top"><b>Order details</b><button class="btn l sm" id="btnSheetClose" style="margin:0">✕ Close</button></div>
   <div class="panel big">
     <div class="mu" style="color:#a5b4fc">TOTAL AMOUNT</div>
     <div id="sLakhs" style="font-size:24px;font-weight:800">0.000000</div>
