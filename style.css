@@ -74,3 +74,12 @@ label{font-size:12px;font-weight:600;display:block;margin-bottom:4px}
 .err{color:#e11d48;font-size:12px;font-weight:600;min-height:16px;margin:0 0 8px}
 .q-math{font-size:22px;font-weight:800;text-align:center;margin-bottom:10px}
 .toast{position:fixed;left:50%;top:80px;transform:translateX(-50%);background:#111;color:#fff;padding:10px 16px;border-radius:10px;font-size:13px;z-index:50;max-width:90%;text-align:center}
+
+/* v3 additions */
+textarea.in{font-family:monospace;font-size:12px;resize:vertical}
+select.in{background:#fff}
+.dt h4{margin:10px 0 6px;font-size:11px;color:var(--mu)}
+.sheet .top{display:flex;justify-content:space-between;align-items:center;position:sticky;top:-16px;background:#fff;padding:8px 0;z-index:1;margin-bottom:6px}
+.sheet .top b{font-size:15px}
+.chips .mu{width:100%}
+header small+small{margin-left:8px}
