@@ -28,27 +28,22 @@ function sGet(k,def){
 function sSet(k,v){
   mem[k]=v;
   try{ localStorage.setItem(k,JSON.stringify(v)); return true; }
-  catch(e){ storageOK=false; toast("⚠️ Could not save on this phone. Do a Backup!"); return false; }
+  catch(e){ storageOK=false; toast("⚠️ Could not save on this phone."); return false; }
 }
 
 /* ===================== STATE ===================== */
-let orders=[], parties=[], empData={};
-let employee="", isAdmin=false, orderMode=false, unlocked=false, expected=0;
-let mode="login", showNet=false, histRange="today", empRange="all", curEmp="", curTab="order";
-
-const saveOrders = ()=>sSet("ora_orders_"+employee,orders);
-const saveParties = ()=>sSet("ora_parties_"+employee,parties);
-const saveEmps = ()=>sSet("ora_emps",empData);
-const users = ()=>sGet("ora_users",{});
-function savePrices(){
-  const m={};
-  products.forEach(p=>m[p.id]={pack:p.pack,mrp:p.mrp,scheme:p.scheme,customK:p.customK});
-  sSet("ora_prices",m);
-}
-function applyPrices(){
-  const m=sGet("ora_prices",{});
-  products.forEach(p=>{ if(m[p.id]) Object.assign(p,m[p.id]); });
-}
+const KEEP=40*864e5;                       // orders live 40 days
+const prune=a=>a.filter(o=>o.ts>Date.now()-KEEP);
+/* ===== GITHUB DATA REPO: edit these two lines ===== */
+const GH_REPO="helptreephilic/KC-OrderData";  // your PRIVATE data repository (owner/name)
+const GH_TOKEN="";                              // leave empty (safer): each phone gets the access key once at login
+let cfg=GH_TOKEN?{r:GH_REPO,t:GH_TOKEN}:(sGet("ora_key","")?{r:GH_REPO,t:sGet("ora_key","")}:null);
+let store=sGet("ora_store",null)||{accounts:{users:{},towns:{}},prices:null,orders:{},pending:[],del:[],dirty:{}};
+let employee="", isAdmin=false, unlocked=false, expected=0, mode="login", showNet=false, curTab="order", curEmp="";
+let histRange="today", empRange="all", emsRange="month", sumRange="month";
+let sumEmp="", sumTown="", sumParty="";
+let syncing=false, again=false, syncTimer=null, outFile=null, outText="";
+const saveStore=()=>sSet("ora_store",store);
 
 /* ===================== HELPERS ===================== */
 const $ = id=>document.getElementById(id);
@@ -56,11 +51,11 @@ const rs = n=>"₹"+(n*100000).toLocaleString("en-IN",{minimumFractionDigits:2,m
 const esc = s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const pad = n=>String(n).padStart(2,"0");
 const dateStr = d=>d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate());
+const cleanName = s=>s.trim().replace(/\s+/g," ");
 function toast(m){
   const d=document.createElement("div");d.className="toast";d.textContent=m;document.body.appendChild(d);
   setTimeout(()=>d.remove(),3000);
 }
-
 // simple (non-cryptographic) hash - a deterrent only
 function hsh(s,seed){
   let h1=0xdeadbeef^seed,h2=0x41c6ce57^seed;
@@ -71,43 +66,193 @@ function hsh(s,seed){
 }
 const H = s=>hsh(s,1)+hsh(s,2);
 const ADMIN_USER="yash9090", ADMIN_H="1jim9o5td0j7nrob6r5za";
+const mkAcct=(u,pw)=>{const s=Math.random().toString(36).slice(2);return{s,h:H(s+"|"+u+"|"+pw)};};
 
-/* ===================== PARTY NAMES ===================== */
-function lev(a,b){
-  const m=[];
-  for(let i=0;i<=a.length;i++)m[i]=[i];
-  for(let j=1;j<=b.length;j++)m[0][j]=j;
-  for(let i=1;i<=a.length;i++)for(let j=1;j<=b.length;j++)
-    m[i][j]=Math.min(m[i-1][j]+1,m[i][j-1]+1,m[i-1][j-1]+(a[i-1]===b[j-1]?0:1));
-  return m[a.length][b.length];
+/* ===================== DATE RANGES ===================== */
+// Month cycle = 21st of previous month .. 20th of this month.
+// TDP (ten day plan) = 21st-month end, 1st-10th, 11th-20th (the current one).
+function rangeOf(r){
+  const n=new Date(),y=n.getFullYear(),m=n.getMonth(),d=n.getDate();
+  if(r==="today")return[new Date(y,m,d),new Date(y,m,d+1)];
+  if(r==="month"){const s=d>=21?new Date(y,m,21):new Date(y,m-1,21);return[s,new Date(s.getFullYear(),s.getMonth()+1,21)];}
+  if(r==="tdp"){
+    if(d>=21)return[new Date(y,m,21),new Date(y,m+1,1)];
+    if(d<=10)return[new Date(y,m,1),new Date(y,m,11)];
+    return[new Date(y,m,11),new Date(y,m,21)];
+  }
+  return null;
 }
-function closestParty(name){
-  const k=name.toLowerCase();let best=null,bd=99;
-  parties.forEach(p=>{const d=lev(k,p.toLowerCase());if(d<bd){bd=d;best=p;}});
-  return (best&&bd>0&&bd<=Math.max(2,Math.floor(k.length*.3)))?best:null;
+function inRange(o,r){const g=rangeOf(r);return !g||(o.ts>=g[0].getTime()&&o.ts<g[1].getTime());}
+function rangeLabel(r){
+  const g=rangeOf(r),f=x=>x.toLocaleDateString("en-IN",{day:"numeric",month:"short"});
+  if(!g)return "All saved orders (last 40 days)";
+  return r==="today"?f(g[0]):f(g[0])+" – "+f(new Date(g[1].getTime()-864e5));
 }
-const cleanName = s=>s.trim().replace(/\s+/g," ");
-const findParty = n=>parties.find(p=>p.toLowerCase()===n.toLowerCase());
+function mountChips(id,get,set,render){
+  const box=$(id),R=[["today","Today"],["tdp","TDP"],["month","Month 21–20"],["all","All"]];
+  box.redraw=()=>{box.innerHTML=R.map(x=>`<button data-r="${x[0]}" class="${get()===x[0]?"on":""}">${x[1]}</button>`).join("")+`<div class="mu">${rangeLabel(get())}</div>`;};
+  box.onclick=e=>{const b=e.target.closest("button");if(!b)return;set(b.dataset.r);box.redraw();render();};
+  box.redraw();
+}
 
-// returns the final party name, or null if cancelled/empty
-function resolveParty(raw){
-  const n=cleanName(raw);
-  if(!n){toast("Enter the purchasing party name");return null;}
-  const ex=findParty(n);
-  if(ex)return ex;
-  const s=closestParty(n);
-  if(s&&confirm(`Did you mean "${s}"?\n\nOK = use "${s}"\nCancel = save "${n}" as a new party`))return s;
-  parties.push(n);saveParties();renderParties();
-  return n;
+/* ===================== PRICES ===================== */
+function savePrices(){
+  const m={};
+  products.forEach(p=>m[p.id]={pack:p.pack,mrp:p.mrp,scheme:p.scheme,customK:p.customK});
+  store.prices=m;store.dirty.prc=true;saveStore();syncSoon();
 }
-function renderParties(){
-  $("partyOpts").innerHTML=parties.map(p=>`<option value="${esc(p)}">`).join("");
-  $("partyList").innerHTML=parties.length
-    ?parties.map(p=>`<div class="row"><span>🏪 ${esc(p)}</span><button class="x" data-rp="${esc(p)}">✕</button></div>`).join("")
-    :'<p class="mu">No parties yet. They are added when you save an order.</p>';
+function applyPrices(){
+  const m=store.prices;
+  if(m)products.forEach(p=>{if(m[p.id])Object.assign(p,m[p.id]);});
+}
+
+/* ===================== GITHUB SYNC ===================== */
+const hdr=()=>({Authorization:"Bearer "+cfg.t,Accept:"application/vnd.github+json"});
+const url=p=>`https://api.github.com/repos/${cfg.r}/contents/${p}`;
+async function ghGet(path){
+  const r=await fetch(url(path),{headers:hdr(),cache:"no-store"});
+  if(r.status===404)return null;
+  if(!r.ok)throw new Error("GitHub error "+r.status);
+  const j=await r.json();
+  return{sha:j.sha,data:JSON.parse(decodeURIComponent(escape(atob(j.content.replace(/\n/g,"")))))};
+}
+async function ghPut(path,data,sha){
+  const body={message:"sync "+path,content:btoa(unescape(encodeURIComponent(JSON.stringify(data))))};
+  if(sha)body.sha=sha;
+  const r=await fetch(url(path),{method:"PUT",headers:{...hdr(),"Content-Type":"application/json"},body:JSON.stringify(body)});
+  if(r.status===409||r.status===422)throw new Error("conflict");
+  if(!r.ok)throw new Error("GitHub error "+r.status);
+}
+// read-modify-write with retry; fn(remote|null) returns the new content
+async function ghUpdate(path,fn){
+  for(let i=0;i<3;i++){
+    const cur=await ghGet(path),nd=fn(cur?cur.data:null);
+    try{await ghPut(path,nd,cur&&cur.sha);return nd;}
+    catch(e){if(e.message!=="conflict"||i===2)throw e;}
+  }
+}
+async function refreshAccounts(){
+  try{const r=await ghGet("accounts.json");if(r){store.accounts=r.data;saveStore();}}catch(e){}
+}
+const syncSoon=()=>{clearTimeout(syncTimer);syncTimer=setTimeout(sync,4000);};
+function setSync(m){$("syncInfo").textContent=m;if(curTab==="set")renderSettings();}
+const waiting=()=>store.pending.length+store.del.length+(store.dirty.acc?1:0)+(store.dirty.prc?1:0);
+
+async function sync(){
+  if(!employee)return;
+  if(syncing){again=true;return;}
+  if(!cfg){setSync("⚠️ Access key needed");return;}
+  if(cfg.r.startsWith("YOUR-")){setSync("⚠️ Set GH_REPO in app.js");return;}
+  if(!navigator.onLine){setSync("📴 Offline · "+waiting()+" waiting");return;}
+  syncing=true;setSync("⏳ Syncing...");
+  try{
+    const beforePrices=JSON.stringify(store.prices);
+    // 1. pull accounts + prices (admin keeps his own copy if it has unsent changes)
+    if(!(isAdmin&&store.dirty.acc)){const r=await ghGet("accounts.json");if(r)store.accounts=r.data;else if(isAdmin)store.dirty.acc=true;}
+    if(!(isAdmin&&store.dirty.prc)){const r=await ghGet("prices.json");if(r)store.prices=r.data;else if(isAdmin&&store.prices)store.dirty.prc=true;}
+    // 2. admin pushes accounts / prices
+    if(isAdmin&&store.dirty.acc){await ghUpdate("accounts.json",()=>store.accounts);delete store.dirty.acc;}
+    if(isAdmin&&store.dirty.prc){await ghUpdate("prices.json",()=>store.prices||{});delete store.dirty.prc;}
+    // 3. push new / deleted orders
+    const owners=[...new Set([...store.pending.map(x=>x.owner),...store.del.map(x=>x.owner)])];
+    for(const ow of owners){
+      const pend=store.pending.filter(x=>x.owner===ow).map(x=>x.id),dels=store.del.filter(x=>x.owner===ow).map(x=>x.id);
+      const mine=(store.orders[ow]||[]).filter(o=>pend.includes(o.id));
+      const res=await ghUpdate("orders/"+ow+".json",rem=>{
+        const m={};(rem||[]).forEach(o=>m[o.id]=o);mine.forEach(o=>m[o.id]=o);dels.forEach(id=>delete m[id]);
+        return prune(Object.values(m));
+      });
+      store.orders[ow]=res.sort((a,b)=>b.ts-a.ts);
+      store.pending=store.pending.filter(x=>!(x.owner===ow&&pend.includes(x.id)));
+      store.del=store.del.filter(x=>!(x.owner===ow&&dels.includes(x.id)));
+      saveStore();
+    }
+    // 4. pull orders (admin: everyone, employee: own)
+    const who=isAdmin?[ADMIN_USER,...Object.keys(store.accounts.users||{})]:[employee];
+    for(const ow of who){
+      const r=await ghGet("orders/"+ow+".json");
+      if(r)store.orders[ow]=prune(r.data).sort((a,b)=>b.ts-a.ts);
+    }
+    saveStore();
+    if(JSON.stringify(store.prices)!==beforePrices){applyPrices();renderList();}
+    setSync("✅ Synced "+new Date().toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"}));
+    refresh();
+  }catch(e){
+    setSync("⚠️ "+e.message+" · "+waiting()+" waiting");
+    clearTimeout(syncTimer);syncTimer=setTimeout(sync,30000);   // retry automatically
+  }
+  syncing=false;
+  if(again){again=false;sync();}                               // something changed while syncing
+}
+function refresh(){
+  if(curTab==="emps")renderEmps();
+  else if(curTab==="emp")renderEmp();
+  else if(curTab==="hist")renderHistory();
+  else if(curTab==="sum")renderSummary();
+  else if(curTab==="order"){renderOrdFor();renderTP();}
+}
+
+/* ===================== SCOPES ===================== */
+const scope=()=>isAdmin
+  ?Object.entries(store.orders).flatMap(([k,a])=>a.map(o=>(o.owner=k,o))).sort((a,b)=>b.ts-a.ts)
+  :(store.orders[employee]||[]).map(o=>(o.owner=employee,o));
+const histList=()=>scope().filter(o=>inRange(o,histRange));
+const empList_=()=>(store.orders[curEmp]||[]).map(o=>(o.owner=curEmp,o)).filter(o=>inRange(o,empRange));
+
+/* ===================== TOWNS & PARTIES ===================== */
+function townsMap(ow){const a=store.accounts;a.towns=a.towns||{};return a.towns[ow]=a.towns[ow]||{};}
+function touchAcc(){store.dirty.acc=true;saveStore();renderTownsAll();renderOrdFor();renderTP();syncSoon();}
+function addTown(ow){
+  const n=cleanName(prompt("Town name:")||"");if(!n)return;
+  const t=townsMap(ow);
+  if(Object.keys(t).some(k=>k.toLowerCase()===n.toLowerCase())){toast("Town already exists");return;}
+  t[n]=[];touchAcc();
+}
+function addPartyTo(ow,town){
+  const n=cleanName(prompt("New party in "+town+":")||"");if(!n)return;
+  const arr=townsMap(ow)[town];
+  if(arr.some(p=>p.toLowerCase()===n.toLowerCase())){toast("Party already added");return;}
+  arr.push(n);touchAcc();
+}
+function townsHtml(ow){
+  const t=townsMap(ow),names=Object.keys(t).sort();
+  return names.length?names.map(n=>`<div class="panel" style="padding:10px">
+    <div class="row"><b>📍 ${esc(n)}</b><span><button class="btn sm l" style="margin:0" data-ap="${esc(n)}">+ Party</button> <button class="x" data-dt="${esc(n)}">✕</button></span></div>
+    ${t[n].map(p=>`<div class="row"><span>🏪 ${esc(p)}</span><button class="x" data-dp="${esc(n)}" data-pp="${esc(p)}">✕</button></div>`).join("")||'<p class="mu">No parties yet.</p>'}</div>`).join(""):'<p class="mu">No towns yet.</p>';
+}
+function renderTownsAll(){
+  if(!isAdmin)return;
+  if(curEmp&&$("townList"))$("townList").innerHTML=townsHtml(curEmp);
+  $("myTownList").innerHTML=townsHtml(ADMIN_USER);
+}
+function townClick(getOwner){
+  return e=>{
+    const d=e.target.dataset,ow=getOwner();if(!ow)return;
+    if(d.ap)addPartyTo(ow,d.ap);
+    else if(d.dt){if(confirm(`Remove town "${d.dt}" and its parties?`)){delete townsMap(ow)[d.dt];touchAcc();}}
+    else if(d.dp){const a=townsMap(ow)[d.dp];a.splice(a.indexOf(d.pp),1);touchAcc();}
+  };
 }
 
 /* ===================== ORDER TAB ===================== */
+const curOwner=()=>isAdmin?($("ordFor").value||ADMIN_USER):employee;
+function renderOrdFor(){
+  if(!isAdmin)return;
+  const sel=$("ordFor"),cur=sel.value;
+  sel.innerHTML=`<option value="${ADMIN_USER}">Myself (${ADMIN_USER})</option>`+Object.keys(store.accounts.users||{}).sort().map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join("");
+  if(cur&&[...sel.options].some(o=>o.value===cur))sel.value=cur;
+}
+function renderTP(){
+  const names=Object.keys(townsMap(curOwner())).sort(),keep=$("town").value;
+  $("town").innerHTML='<option value="">Select town</option>'+names.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join("");
+  if(names.includes(keep))$("town").value=keep;
+  renderParty();
+}
+function renderParty(){
+  const ps=(townsMap(curOwner())[$("town").value]||[]).slice().sort(),keep=$("party").value;
+  $("party").innerHTML='<option value="">Select party</option>'+ps.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join("");
+  if(ps.includes(keep))$("party").value=keep;
+}
 function renderList(){
   const q=$("search").value.trim().toLowerCase();
   let html="",last=null;
@@ -123,7 +268,6 @@ function renderList(){
   $("list").innerHTML=html||'<p class="mu">No products found.</p>';
   updateSummary();
 }
-
 function setQty(id,val){
   const p=products.find(x=>x.id===id),n=parseFloat(val);
   p.qty=(isNaN(n)||n<0)?0:n;
@@ -131,7 +275,6 @@ function setQty(id,val){
   if(row){row.classList.toggle("act",p.qty>0);$("t"+id).textContent=(p.qty*rateOf(p)).toFixed(6);}
   updateSummary();
 }
-
 function updateSummary(){
   let sku=0,qty=0,total=0;const series={},items=[];
   products.forEach(p=>{
@@ -151,10 +294,10 @@ function updateSummary(){
   $("sSeries").innerHTML=sk.length?sk.map(g=>`<div class="row"><span>${esc(g)}</span><b>${series[g].toFixed(5)}</b></div>`).join(""):'<p class="mu">No orders placed yet...</p>';
   $("sItems").innerHTML=items.length?items.map(i=>`<div class="row"><span>${esc(i[0])} × ${i[1]}</span><b>${i[2].toFixed(5)}</b></div>`).join(""):'<p class="mu">Enter quantities...</p>';
 }
-
 function saveOrder(){
-  const party=resolveParty($("party").value);
-  if(!party)return;
+  const ow=curOwner(),town=$("town").value,party=$("party").value;
+  if(!town){toast("Select the town");return;}
+  if(!party){toast("Select the purchasing party");return;}
   const lines=[];let total=0,qty=0;
   products.forEach(p=>{
     if(p.qty>0){
@@ -165,38 +308,32 @@ function saveOrder(){
   });
   if(!lines.length)return;
   const now=new Date();
-  const order={id:"O"+now.getTime().toString(36)+Math.random().toString(36).slice(2,5),ts:now.getTime(),employee,party,lines,qty,total};
-  orders.unshift(order);
-  if(saveOrders()){
-    products.forEach(p=>p.qty=0);
-    $("party").value="";$("partyHint").innerHTML="";
-    $("sheet").classList.add("hide");
-    renderList();
-    toast("✅ Order saved");
-  }else orders.shift();
+  const order={id:"O"+now.getTime().toString(36)+Math.random().toString(36).slice(2,5),ts:now.getTime(),owner:ow,employee:ow,by:employee,town,party,lines,qty,total};
+  (store.orders[ow]=store.orders[ow]||[]).unshift(order);
+  store.pending.push({owner:ow,id:order.id});
+  saveStore();
+  products.forEach(p=>p.qty=0);
+  $("party").value="";$("sheet").classList.add("hide");
+  renderList();toast("✅ Order saved");
+  sync();
 }
 
-/* ===================== ORDER LISTS (history + employee view) ===================== */
-function inRange(o,r){
-  if(r==="all")return true;
-  const d=new Date(o.ts),n=new Date();
-  if(r==="today")return dateStr(d)===dateStr(n);
-  if(r==="month")return d.getFullYear()===n.getFullYear()&&d.getMonth()===n.getMonth();
-  if(r==="week"){
-    const mon=new Date(n.getFullYear(),n.getMonth(),n.getDate()-((n.getDay()+6)%7));
-    return d>=mon;
-  }
-}
+/* ===================== ORDER LISTS ===================== */
 function ordersHtml(list){
   if(!list.length)return '<p class="mu c">No orders in this period.</p>';
   return list.map(o=>{
-    const d=new Date(o.ts);
+    const d=new Date(o.ts),ser={};
+    o.lines.forEach(l=>ser[l.series]=(ser[l.series]||0)+l.total);
     return `<details class="panel"><summary class="oh">
       <div>${d.toLocaleDateString("en-IN")} ${d.toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})}<br>
-      <span>${o.party?"🏪 "+esc(o.party)+" · ":""}${esc(o.employee||"")} · ${o.qty} qty</span></div>
+      <span>${o.town?"📍 "+esc(o.town)+" · ":""}${o.party?"🏪 "+esc(o.party)+" · ":""}${esc(o.employee||"")}${o.by&&o.by!==o.employee?" (by "+esc(o.by)+")":""} · ${o.qty} qty</span></div>
       <div>${rs(o.total)}</div></summary>
-      <div class="dt">${o.lines.map(l=>`<div class="row"><span>${esc(l.name)} × ${l.qty}</span><b>${l.total.toFixed(5)}</b></div>`).join("")}
-      <button class="btn r sm" data-del="${o.id}">Delete this order</button></div></details>`;
+      <div class="dt"><h4>SERIES BREAKDOWN</h4>
+      ${Object.keys(ser).map(g=>`<div class="row"><span>${esc(g)}</span><b>${ser[g].toFixed(5)}</b></div>`).join("")}
+      <h4>ITEMS</h4>
+      ${o.lines.map(l=>`<div class="row"><span>${esc(l.name)} × ${l.qty}${isAdmin&&l.rate?` @ ${l.rate.toFixed(6)}`:""}</span><b>${l.total.toFixed(5)}</b></div>`).join("")}
+      <div class="row"><span><b style="font-family:inherit">Total</b></span><b>${o.total.toFixed(6)}</b></div>
+      ${isAdmin?`<button class="btn r sm" data-del="${o.id}" data-own="${esc(o.owner||o.employee||"")}">Delete this order</button>`:""}</div></details>`;
   }).join("");
 }
 function fill(p,list){
@@ -204,41 +341,95 @@ function fill(p,list){
   $(p+"Qty").textContent=list.reduce((a,o)=>a+o.qty,0);
   $(p+"Amt").textContent=rs(list.reduce((a,o)=>a+o.total,0));
 }
-const histList = ()=>orders.filter(o=>inRange(o,histRange));
-const empList_ = ()=>(empData[curEmp]||[]).filter(o=>inRange(o,empRange));
 function renderHistory(){const l=histList();fill("h",l);$("orders").innerHTML=ordersHtml(l);}
-function renderEmp(){const l=empList_();fill("e",l);$("empOrders").innerHTML=ordersHtml(l);}
+function renderEmp(){const l=empList_();fill("e",l);$("empOrders").innerHTML=ordersHtml(l);renderTownsAll();}
+function delOrder(id,ow){
+  if(!isAdmin||!confirm("Delete this order permanently (for everyone)?"))return;
+  store.orders[ow]=(store.orders[ow]||[]).filter(o=>o.id!==id);
+  store.pending=store.pending.filter(x=>x.id!==id);
+  store.del.push({owner:ow,id});saveStore();refresh();sync();
+}
 
-/* ===================== CSV EXPORT ===================== */
+/* ===================== SUMMARY (employee > town > party > orders) ===================== */
+function renderSummary(){
+  const nm=v=>v||"(none)";
+  let list=scope().filter(o=>inRange(o,sumRange));
+  if(sumEmp)list=list.filter(o=>o.employee===sumEmp);
+  if(sumTown)list=list.filter(o=>nm(o.town)===sumTown);
+  if(sumParty)list=list.filter(o=>nm(o.party)===sumParty);
+  const level=(isAdmin&&!sumEmp)?"employee":!sumTown?"town":!sumParty?"party":"orders";
+  fill("u",list);
+  $("uPath").textContent=[isAdmin?(sumEmp||"All employees"):"",sumTown,sumParty].filter(Boolean).join(" › ")||"All towns";
+  $("btnUBack").classList.toggle("hide",level==="employee"||(!isAdmin&&level==="town"));
+  if(level==="orders"){$("uList").innerHTML=ordersHtml(list);return;}
+  const g={};
+  list.forEach(o=>{const k=nm(o[level]),x=g[k]||(g[k]={n:0,q:0,t:0});x.n++;x.q+=o.qty;x.t+=o.total;});
+  const ks=Object.keys(g).sort(),ic={employee:"👤",town:"📍",party:"🏪"}[level];
+  $("uList").innerHTML=ks.length?ks.map(k=>`<div class="item emp" data-k="${esc(k)}" data-lv="${level}"><div class="n"><b>${ic} ${esc(k)}</b><div>${g[k].n} orders · ${g[k].q} qty</div></div><div class="tot">${rs(g[k].t)}</div></div>`).join(""):'<p class="mu c">No orders in this period.</p>';
+}
+
+/* ===================== CSV EXPORT / SHARE ===================== */
 function buildCsv(list){
-  const head=["OrderID","Date","Time","Employee","Party","Series","Product","Qty",...(isAdmin?["Net Rate (Lakh)"]:[]),"Total (Lakh)","Total (Rs)"];
+  const head=["OrderID","Date","Time","Employee","Town","Party","Series","Product","Qty",...(isAdmin?["Net Rate (Lakh)"]:[]),"Total (Lakh)","Total (Rs)"];
   const rows=[head];
   list.slice().sort((a,b)=>a.ts-b.ts).forEach(o=>{
     const d=new Date(o.ts);
-    o.lines.forEach(l=>rows.push([o.id,dateStr(d),pad(d.getHours())+":"+pad(d.getMinutes()),o.employee||"",o.party||"",l.series,l.name,l.qty,...(isAdmin?[l.rate.toFixed(6)]:[]),l.total.toFixed(6),(l.total*100000).toFixed(2)]));
+    o.lines.forEach(l=>rows.push([o.id,dateStr(d),pad(d.getHours())+":"+pad(d.getMinutes()),o.employee||"",o.town||"",o.party||"",l.series,l.name,l.qty,...(isAdmin?[l.rate.toFixed(6)]:[]),l.total.toFixed(6),(l.total*100000).toFixed(2)]));
   });
+  return rowsToCsv(rows);
+}
+function rowsToCsv(rows){
   const cell=v=>{v=String(v);return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;};
   return "\uFEFF"+rows.map(r=>r.map(cell).join(",")).join("\r\n");
 }
-const makeFile = (text,name,type)=>new File([text],name,{type});
-function download(file){
-  const a=document.createElement("a");a.href=URL.createObjectURL(file);a.download=file.name;
-  document.body.appendChild(a);a.click();
-  setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000);
-}
-async function shareOrDownload(file){
-  try{
-    if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:file.name});return;}
-  }catch(e){if(e&&e.name==="AbortError")return;}
-  download(file);
-  toast("Sharing not supported here. File downloaded - send it manually.");
-}
-function csvFile(list,tag){
+const makeFile=(text,name)=>new File([text],name,{type:"text/csv"});
+function csvPack(list,tag){
   if(!list.length){toast("No orders to export");return null;}
-  return makeFile(buildCsv(list),`${tag}_${dateStr(new Date())}.csv`,"text/csv");
+  const t=buildCsv(list);return{f:makeFile(t,`${tag}_${dateStr(new Date())}.csv`),t};
+}
+function totalsPack(){
+  const g=rangeOf(emsRange),names=Object.keys(store.accounts.users||{}).sort(),all=scope();
+  const rows=[["Employee","Orders","Qty","Total (Lakh)","Total (Rs)"]];let n=0,q=0,t=0;
+  names.concat(all.some(o=>o.employee===ADMIN_USER)?[ADMIN_USER]:[]).forEach(e=>{
+    const l=all.filter(o=>o.employee===e&&inRange(o,emsRange));
+    const a=l.length,b=l.reduce((x,o)=>x+o.qty,0),c=l.reduce((x,o)=>x+o.total,0);
+    n+=a;q+=b;t+=c;rows.push([e,a,b,c.toFixed(6),(c*100000).toFixed(2)]);
+  });
+  rows.push(["TOTAL",n,q,t.toFixed(6),(t*100000).toFixed(2)]);
+  const txt=rowsToCsv(rows);
+  return{f:makeFile(txt,`employee_totals_${emsRange}_${dateStr(new Date())}.csv`),t:txt};
+}
+function openOut(p){
+  if(!p)return;
+  outFile=p.f;outText=p.t;
+  $("outTitle").textContent=p.f.name;$("outText").value=p.t;$("out").classList.remove("hide");
+}
+function download(file,text){
+  try{
+    const a=document.createElement("a");a.href=URL.createObjectURL(file);a.download=file.name;
+    document.body.appendChild(a);a.click();
+    setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000);
+  }catch(e){
+    const a=document.createElement("a");a.href="data:text/csv;charset=utf-8,"+encodeURIComponent(text);a.download=file.name;
+    document.body.appendChild(a);a.click();a.remove();
+  }
+}
+async function shareFile(p){
+  if(!p)return;
+  try{if(navigator.canShare&&navigator.canShare({files:[p.f]})){await navigator.share({files:[p.f],title:p.f.name});return;}}
+  catch(e){if(e&&e.name==="AbortError")return;}
+  try{if(navigator.share){await navigator.share({title:p.f.name,text:p.t});return;}}
+  catch(e){if(e&&e.name==="AbortError")return;}
+  openOut(p);
+  toast("Sharing not available here. Use Copy or Download.");
+}
+async function copyText(t){
+  try{await navigator.clipboard.writeText(t);}
+  catch(e){const x=$("outText");x.removeAttribute("readonly");x.select();document.execCommand("copy");x.setAttribute("readonly","");}
+  toast("Copied");
 }
 
-/* ===================== CSV IMPORT (admin) ===================== */
+/* ===================== CSV IMPORT (admin, per employee) ===================== */
 function parseCsv(t){
   t=t.replace(/^\uFEFF/,"");
   const rows=[];let r=[],c="",q=false;
@@ -255,129 +446,145 @@ function parseCsv(t){
 }
 function ordersFromRows(rows){
   const h=rows[0].map(x=>x.trim().toLowerCase()),ix=n=>h.indexOf(n);
-  const c={id:ix("orderid"),d:ix("date"),t:ix("time"),e:ix("employee"),p:ix("party"),s:ix("series"),n:ix("product"),q:ix("qty"),l:ix("total (lakh)")};
+  const c={id:ix("orderid"),d:ix("date"),t:ix("time"),e:ix("employee"),w:ix("town"),p:ix("party"),s:ix("series"),n:ix("product"),q:ix("qty"),l:ix("total (lakh)")};
   if(c.id<0||c.n<0||c.q<0||c.l<0)return null;
   const m={};
   rows.slice(1).forEach(r=>{
     const id=r[c.id];if(!id)return;
     const o=m[id]||(m[id]={id,ts:new Date((r[c.d]||"")+"T"+(r[c.t]||"00:00")).getTime()||Date.now(),
-      employee:c.e>=0?r[c.e]:"",party:c.p>=0?r[c.p]:"",lines:[],qty:0,total:0});
+      employee:c.e>=0?r[c.e]:"",town:c.w>=0?r[c.w]:"",party:c.p>=0?r[c.p]:"",lines:[],qty:0,total:0});
     const q=parseFloat(r[c.q])||0,t=parseFloat(r[c.l])||0;
     o.lines.push({series:c.s>=0?r[c.s]:"",name:r[c.n],qty:q,rate:q?t/q:0,total:t});
     o.qty+=q;o.total+=t;
   });
   return Object.values(m);
 }
-function mergeInto(arr,incoming){
-  const have=new Set(arr.map(o=>o.id));let add=0;
-  incoming.forEach(o=>{if(!have.has(o.id)){arr.push(o);have.add(o.id);add++;}});
-  arr.sort((a,b)=>b.ts-a.ts);
-  return add;
+function importText(text){
+  const rows=parseCsv(text),list=rows.length?ordersFromRows(rows):null;
+  if(!list||!list.length){toast("❌ Not a valid order CSV");return false;}
+  const odd=list.filter(o=>o.employee&&o.employee.toLowerCase()!==curEmp.toLowerCase()).length;
+  if(odd&&!confirm(`${odd} order(s) in this file belong to a different employee name.\nAdd them to "${curEmp}" anyway?`))return false;
+  const arr=store.orders[curEmp]=store.orders[curEmp]||[],have=new Set(arr.map(o=>o.id));let add=0;
+  list.forEach(o=>{
+    if(!have.has(o.id)){o.owner=curEmp;o.employee=curEmp;o.by=employee;arr.push(o);store.pending.push({owner:curEmp,id:o.id});add++;}
+  });
+  arr.sort((a,b)=>b.ts-a.ts);saveStore();renderEmp();sync();
+  toast(`Added ${add} orders, skipped ${list.length-add} duplicates`);
+  return true;
 }
 function importFile(file){
   if(/\.xlsx?$/i.test(file.name)){
-    alert("Excel files (.xlsx) are not supported yet.\n\nOpen the file in Excel and use Save As > CSV, or ask the employee to send the CSV they exported from the app.");
+    alert("Excel files (.xlsx) are not supported yet.\n\nOpen the file in Excel and use Save As > CSV, or paste the CSV text instead.");
     return;
   }
   const r=new FileReader();
-  r.onload=()=>{
-    const rows=parseCsv(String(r.result));
-    const list=rows.length?ordersFromRows(rows):null;
-    if(!list||!list.length){toast("❌ Not a valid order CSV");return;}
-    const odd=list.filter(o=>o.employee&&o.employee.toLowerCase()!==curEmp.toLowerCase()).length;
-    if(odd&&!confirm(`${odd} order(s) in this file belong to a different employee name.\nAdd them to "${curEmp}" anyway?`))return;
-    const arr=empData[curEmp]||(empData[curEmp]=[]);
-    const add=mergeInto(arr,list);
-    saveEmps();renderEmp();
-    toast(`Added ${add} orders, skipped ${list.length-add} duplicates`);
-  };
+  r.onload=()=>{$("impText").value=String(r.result);if(importText(String(r.result)))$("imp").classList.add("hide");};
+  r.onerror=()=>toast("Could not read that file. Paste the CSV text instead.");
   r.readAsText(file);
 }
 
 /* ===================== EMPLOYEES (admin) ===================== */
 function renderEmps(){
-  const names=Object.keys(empData).sort();
+  const names=Object.keys(store.accounts.users||{}).sort(),all=scope();
   $("empList").innerHTML=names.length?names.map(n=>{
-    const l=empData[n],t=l.reduce((a,o)=>a+o.total,0);
+    const l=all.filter(o=>o.employee===n&&inRange(o,emsRange)),t=l.reduce((a,o)=>a+o.total,0);
     const last=l.length?new Date(Math.max(...l.map(o=>o.ts))).toLocaleDateString("en-IN"):"no orders";
     return `<div class="item emp" data-emp="${esc(n)}"><div class="n"><b>👤 ${esc(n)}</b><div>${l.length} orders · last: ${last}</div></div><div class="tot">${rs(t)}</div></div>`;
   }).join(""):'<p class="mu c">No employees yet. Tap "+ Add employee".</p>';
 }
 function addEmployee(){
-  const n=cleanName(prompt("Employee username (same as in their app):")||"");
-  if(!n)return;
-  if(Object.keys(empData).some(k=>k.toLowerCase()===n.toLowerCase())){toast("Already in the list");return;}
-  empData[n]=[];saveEmps();renderEmps();
+  const u=cleanName(prompt("New employee username (letters/numbers, 3-20):")||"").toLowerCase();
+  if(!u)return;
+  if(!/^[a-z0-9_.]{3,20}$/.test(u)){toast("Username: 3-20 letters or numbers");return;}
+  if(u===ADMIN_USER||(store.accounts.users||{})[u]){toast("That username is taken");return;}
+  const pw=prompt("Set a password for "+u+" (4+ characters):")||"";
+  if(pw.length<4){toast("Password needs 4+ characters");return;}
+  store.accounts.users=store.accounts.users||{};
+  store.accounts.users[u]=mkAcct(u,pw);townsMap(u);
+  touchAcc();renderEmps();
+  alert(`Account created.\n\nUsername: ${u}\nPassword: ${pw}\n\nGive these to the employee personally. Now add their towns and parties.`);
+  openEmp(u);
 }
 function openEmp(name){
   curEmp=name;empRange="all";
   $("empName").textContent="👤 "+name;
-  document.querySelectorAll("#empChips button").forEach(b=>b.classList.toggle("on",b.dataset.r==="all"));
+  $("empChips").redraw();
   tab("emp");
+}
+function resetPw(){
+  const pw=prompt("New password for "+curEmp+" (4+ characters):")||"";
+  if(pw.length<4){if(pw)toast("Password needs 4+ characters");return;}
+  store.accounts.users[curEmp]=mkAcct(curEmp,pw);touchAcc();
+  alert("Password changed. Give it to "+curEmp+" personally.");
+}
+function removeEmp(){
+  if(!confirm(`Remove ${curEmp}'s account? Their saved orders stay in the records.`))return;
+  delete store.accounts.users[curEmp];touchAcc();tab("emps");
 }
 
 /* ===================== LOGIN ===================== */
 function setMode(m){
   mode=m;const last=sGet("ora_last","");
-  $("lUserWrap").classList.toggle("hide",m==="unlock");
-  $("lPass2Wrap").classList.toggle("hide",m!=="create");
-  $("lTitle").textContent=m==="unlock"?"Welcome back, "+last:m==="create"?"Create account":"Log in";
-  $("lGo").textContent=m==="create"?"Create & Enter":"Unlock";
-  $("lErr").textContent="";$("lPass").value="";$("lPass2").value="";
-  $("lLink1").textContent=m==="create"?"Already have an account? Log in":"Create new account";
+  $("lUserWrap").classList.toggle("hide",m!=="login");
+  $("lPassWrap").classList.toggle("hide",m==="code");
+  $("lCodeWrap").classList.toggle("hide",m!=="code");
+  $("lTitle").textContent=m==="unlock"?"Welcome back, "+last:m==="code"?"Access key":"Log in";
+  $("lGo").textContent=m==="code"?"Save code":m==="unlock"?"Unlock":"Log in";
+  $("lErr").textContent="";$("lPass").value="";$("lCode").value="";
+  $("lLink1").textContent=m==="code"?"Back to login":"Enter access key";
+  $("lLink1").parentElement.classList.toggle("hide",!!GH_TOKEN||(!!cfg&&m!=="code"));
   $("lLink2").classList.toggle("hide",m!=="unlock");
 }
 function initLogin(){$("login").classList.remove("hide");setMode(sGet("ora_last","")?"unlock":"login");}
-function doLogin(){
+async function doLogin(){
   const err=m=>{$("lErr").textContent=m;};
+  if(mode==="code"){
+    const k=$("lCode").value.trim();if(k.length<20||/\s/.test(k))return err("That access key is not valid");
+    sSet("ora_key",k);cfg={r:GH_REPO,t:k};toast("Saved. Now log in.");
+    return setMode(sGet("ora_last","")?"unlock":"login");
+  }
   const u=mode==="unlock"?sGet("ora_last",""):$("lUser").value.trim().toLowerCase();
   const pw=$("lPass").value;
   if(!u||!pw)return err("Enter username and password");
-  if(mode==="create"){
-    if(!/^[a-z0-9_.]{3,20}$/.test(u))return err("Username: 3-20 letters or numbers");
-    const us=users();
-    if(u===ADMIN_USER||us[u])return err("That username is taken");
-    if(pw.length<4)return err("Password needs 4+ characters");
-    if(pw!==$("lPass2").value)return err("Passwords do not match");
-    const salt=Math.random().toString(36).slice(2);
-    us[u]={s:salt,h:H(salt+"|"+u+"|"+pw)};sSet("ora_users",us);
-    return start(u,false);
-  }
   if(u===ADMIN_USER){if(H("ora|"+u+"|"+pw)!==ADMIN_H)return err("Wrong password");return start(u,true);}
-  const a=users()[u];
-  if(!a)return err("No such user on this phone. Create an account.");
+  if(!cfg)return err("First enter the access key from your uncle");
+  $("lGo").disabled=true;
+  if(navigator.onLine)await refreshAccounts();
+  $("lGo").disabled=false;
+  const a=(store.accounts.users||{})[u];
+  if(!a)return err(navigator.onLine?"No such account. Ask your uncle to create it.":"Offline. Connect to the internet for the first login.");
   if(H(a.s+"|"+u+"|"+pw)!==a.h)return err("Wrong password");
   start(u,false);
 }
 function updateNav(){
-  const orderUi=!isAdmin||orderMode;
-  const vis={emps:isAdmin,order:orderUi,hist:orderUi,back:isAdmin,set:true};
+  const vis={emps:isAdmin,order:true,hist:true,sum:true,back:isAdmin,set:true};
   document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("hide",!vis[b.dataset.t]));
 }
 function start(u,adm){
-  employee=u;isAdmin=adm;orderMode=false;showNet=false;unlocked=false;
+  employee=u;isAdmin=adm;showNet=false;unlocked=false;curEmp="";
+  sumEmp=adm?"":u;sumTown="";sumParty="";
   sSet("ora_last",u);
-  orders=sGet("ora_orders_"+u,[]);parties=sGet("ora_parties_"+u,[]);
-  empData=adm?sGet("ora_emps",{}):{};
+  Object.keys(store.orders).forEach(k=>store.orders[k]=prune(store.orders[k]));
+  applyPrices();
   products.forEach(p=>p.qty=0);
-  $("party").value="";$("partyHint").innerHTML="";
   $("btnNet").textContent="Show Net Rate Bar";
-  $("btnOrderMode").textContent="Show order placing UI";
   document.querySelectorAll(".adm").forEach(e=>e.classList.toggle("hide",!adm));
   $("btnOut").classList.remove("hide");$("login").classList.add("hide");
-  showWho();updateNav();renderList();renderParties();
+  showWho();updateNav();renderList();renderOrdFor();renderTP();
   tab(adm?"emps":"order");
+  setSync(cfg?"":"⚠️ Not connected");
+  sync();
 }
 function logout(){
-  employee="";isAdmin=false;orders=[];parties=[];empData={};unlocked=false;showNet=false;orderMode=false;
+  employee="";isAdmin=false;unlocked=false;showNet=false;curEmp="";
   products.forEach(p=>p.qty=0);
   document.querySelectorAll(".adm").forEach(e=>e.classList.add("hide"));
-  $("btnOut").classList.add("hide");$("who").textContent="";
+  $("btnOut").classList.add("hide");$("who").textContent="";$("syncInfo").textContent="";
   initLogin();
 }
 function showWho(){
   $("who").textContent=employee?((isAdmin?"👑 Admin: ":"👤 ")+employee):"";
-  $("acctInfo").textContent=employee?`Logged in as ${employee} (${isAdmin?"Admin":"Employee"}). Orders are kept on this phone under this account.`:"";
+  $("acctInfo").textContent=employee?`Logged in as ${employee} (${isAdmin?"Admin":"Employee"}).`:"";
 }
 
 /* ===================== ADMIN BACKEND (math check first) ===================== */
@@ -398,35 +605,16 @@ function renderBack(){
     <div class="mu" id="nm${p.id}">${stat(p)}</div></div>`).join("");
 }
 
-/* ===================== BACKUP / SETTINGS ===================== */
+/* ===================== SETTINGS ===================== */
 function renderChecks(){
   const ok=b=>b?"✅":"❌";
-  const items=[["Storage (saving orders)",storageOK],["Share to WhatsApp",!!navigator.share],
-    ["Works offline (HTTPS)",location.protocol==="https:"||location.hostname==="localhost"],["Secure mode",window.isSecureContext]];
+  const items=[["Storage (saving orders)",storageOK],["Online",navigator.onLine],["GitHub connected",!!cfg],["Share button",!!navigator.share]];
   $("checks").innerHTML=items.map(i=>`<div class="row"><span>${i[0]}</span><b>${ok(i[1])}</b></div>`).join("")+
-    `<div class="row"><span>Saved orders</span><b>${orders.length}</b></div>`;
+    `<div class="row"><span>Waiting to upload</span><b>${waiting()}</b></div>`;
 }
-function backup(){
-  const d={app:"ora",v:2,exported:Date.now(),employee,orders,parties};
-  if(isAdmin)d.emps=empData;
-  shareOrDownload(makeFile(JSON.stringify(d),`backup_${employee}_${dateStr(new Date())}.json`,"application/json"));
-}
-function restore(file){
-  const r=new FileReader();
-  r.onload=()=>{
-    try{
-      const d=JSON.parse(r.result);
-      if(d.app!=="ora"||!Array.isArray(d.orders))throw 0;
-      let add=mergeInto(orders,d.orders);saveOrders();
-      (d.parties||[]).forEach(p=>{if(!findParty(p))parties.push(p);});saveParties();renderParties();
-      if(isAdmin&&d.emps){
-        Object.keys(d.emps).forEach(n=>{add+=mergeInto(empData[n]||(empData[n]=[]),d.emps[n]);});
-        saveEmps();
-      }
-      renderChecks();toast(`Restored ${add} new orders`);
-    }catch(e){toast("❌ Not a valid backup file");}
-  };
-  r.readAsText(file);
+function renderSettings(){
+  showWho();renderChecks();renderTownsAll();
+  $("syncLine").textContent=($("syncInfo").textContent||"Not synced yet")+" · Syncs automatically · Orders are kept for 40 days.";
 }
 
 /* ===================== TABS ===================== */
@@ -435,76 +623,91 @@ function tab(t){
   if(t==="back"&&!unlocked){askMath();return;}
   if(t!=="back")unlocked=false;
   curTab=t;
-  ["emps","emp","order","hist","back","set"].forEach(x=>$("tab-"+x).classList.toggle("hide",x!==t));
+  ["emps","emp","order","hist","sum","back","set"].forEach(x=>$("tab-"+x).classList.toggle("hide",x!==t));
   const navKey=t==="emp"?"emps":t;
   document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.t===navKey));
+  ["chips","empChips","emsChips","sChips"].forEach(i=>$(i).redraw&&$(i).redraw());
   $("bar").classList.toggle("hide",t!=="order");
   $("sheet").classList.add("hide");
   if(t==="emps")renderEmps();
   if(t==="emp")renderEmp();
+  if(t==="order"){renderOrdFor();renderTP();}
   if(t==="hist")renderHistory();
+  if(t==="sum")renderSummary();
   if(t==="back")renderBack();
-  if(t==="set")renderChecks();
+  if(t==="set")renderSettings();
   window.scrollTo(0,0);
-}
-
-function chipHandler(boxId,setRange,render){
-  $(boxId).onclick=e=>{
-    const b=e.target.closest("button");if(!b)return;
-    setRange(b.dataset.r);
-    document.querySelectorAll("#"+boxId+" button").forEach(x=>x.classList.toggle("on",x===b));
-    render();
-  };
-}
-function deleteHandler(boxId,getArr,afterDelete){
-  $(boxId).onclick=e=>{
-    const id=e.target.dataset.del;
-    if(id&&confirm("Delete this order permanently?")){afterDelete(getArr().filter(o=>o.id!==id));}
-  };
 }
 
 /* ===================== EVENTS ===================== */
 document.addEventListener("DOMContentLoaded",()=>{
   applyPrices();initLogin();
-
   document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>tab(b.dataset.t));
+
+  mountChips("chips",()=>histRange,r=>histRange=r,renderHistory);
+  mountChips("empChips",()=>empRange,r=>empRange=r,renderEmp);
+  mountChips("emsChips",()=>emsRange,r=>emsRange=r,renderEmps);
+  mountChips("sChips",()=>sumRange,r=>sumRange=r,renderSummary);
 
   // login
   $("lGo").onclick=doLogin;
-  $("login").addEventListener("keydown",e=>{if(e.key==="Enter")doLogin();});
-  $("lLink1").onclick=e=>{e.preventDefault();setMode(mode==="create"?(sGet("ora_last","")?"unlock":"login"):"create");};
+  $("login").addEventListener("keydown",e=>{if(e.key==="Enter"&&e.target.tagName!=="TEXTAREA")doLogin();});
+  $("lLink1").onclick=e=>{e.preventDefault();setMode(mode==="code"?(sGet("ora_last","")?"unlock":"login"):"code");};
   $("lLink2").onclick=e=>{e.preventDefault();setMode("login");};
   $("btnOut").onclick=logout;
 
   // order tab
+  $("ordFor").onchange=()=>{$("town").value="";renderTP();};
+  $("town").onchange=()=>{$("party").value="";renderParty();};
   $("search").oninput=renderList;
   $("list").addEventListener("input",e=>{if(e.target.classList.contains("q"))setQty(+e.target.dataset.id,e.target.value);});
   $("barTap").onclick=()=>$("sheet").classList.toggle("hide");
+  $("btnSheetClose").onclick=()=>$("sheet").classList.add("hide");
   $("btnClear").onclick=()=>{if(products.some(p=>p.qty>0)&&confirm("Clear all quantities?")){products.forEach(p=>p.qty=0);renderList();}};
   $("btnSave").onclick=saveOrder;
-  $("party").oninput=()=>{
-    const n=cleanName($("party").value);
-    const s=n&&!findParty(n)?closestParty(n):null;
-    $("partyHint").innerHTML=s?`Did you mean <button class="chip" data-use="${esc(s)}">${esc(s)}</button> ?`:"";
-  };
-  $("partyHint").onclick=e=>{const u=e.target.dataset.use;if(u){$("party").value=u;$("partyHint").innerHTML="";}};
 
-  // history
-  chipHandler("chips",r=>histRange=r,renderHistory);
-  deleteHandler("orders",()=>orders,a=>{orders=a;saveOrders();renderHistory();});
-  $("btnCsv").onclick=()=>{const f=csvFile(histList(),"orders_"+histRange);if(f)download(f);};
-  $("btnShareCsv").onclick=()=>{const f=csvFile(histList(),"orders_"+histRange);if(f)shareOrDownload(f);};
+  // history + summary + delete
+  $("btnCsv").onclick=()=>openOut(csvPack(histList(),"orders_"+histRange));
+  $("btnShareCsv").onclick=()=>shareFile(csvPack(histList(),"orders_"+histRange));
+  document.addEventListener("click",e=>{const id=e.target.dataset&&e.target.dataset.del;if(id)delOrder(id,e.target.dataset.own);});
+  $("uList").onclick=e=>{
+    const it=e.target.closest(".item");if(!it||!it.dataset.k)return;
+    const k=it.dataset.k,lv=it.dataset.lv;
+    if(lv==="employee")sumEmp=k;else if(lv==="town")sumTown=k;else sumParty=k;
+    renderSummary();window.scrollTo(0,0);
+  };
+  $("btnUBack").onclick=()=>{
+    if(sumParty)sumParty="";else if(sumTown)sumTown="";else if(isAdmin)sumEmp="";
+    renderSummary();
+  };
 
   // employees (admin)
   $("btnAddEmp").onclick=addEmployee;
+  $("btnTotals").onclick=()=>openOut(totalsPack());
+  $("btnTotalsShare").onclick=()=>shareFile(totalsPack());
   $("empList").onclick=e=>{const it=e.target.closest(".item");if(it&&it.dataset.emp)openEmp(it.dataset.emp);};
   $("btnEmpBack").onclick=()=>tab("emps");
-  chipHandler("empChips",r=>empRange=r,renderEmp);
-  deleteHandler("empOrders",()=>empData[curEmp]||[],a=>{empData[curEmp]=a;saveEmps();renderEmp();});
-  $("btnImport").onclick=()=>$("fileImport").click();
+  $("btnECsv").onclick=()=>openOut(csvPack(empList_(),curEmp+"_"+empRange));
+  $("btnEShare").onclick=()=>shareFile(csvPack(empList_(),curEmp+"_"+empRange));
+  $("btnAddTown").onclick=()=>addTown(curEmp);
+  $("townList").onclick=townClick(()=>curEmp);
+  $("btnAddMyTown").onclick=()=>addTown(ADMIN_USER);
+  $("myTownList").onclick=townClick(()=>ADMIN_USER);
+  $("btnResetPw").onclick=resetPw;
+  $("btnRemoveEmp").onclick=removeEmp;
+
+  // import modal
+  $("btnImport").onclick=()=>{$("impText").value="";$("imp").classList.remove("hide");};
+  $("impFile").onclick=()=>$("fileImport").click();
   $("fileImport").onchange=e=>{if(e.target.files[0])importFile(e.target.files[0]);e.target.value="";};
-  $("btnECsv").onclick=()=>{const f=csvFile(empList_(),curEmp+"_"+empRange);if(f)download(f);};
-  $("btnEShare").onclick=()=>{const f=csvFile(empList_(),curEmp+"_"+empRange);if(f)shareOrDownload(f);};
+  $("impGo").onclick=()=>{const t=$("impText").value.trim();if(!t){toast("Paste the CSV text or choose a file");return;}if(importText(t))$("imp").classList.add("hide");};
+  $("impClose").onclick=()=>$("imp").classList.add("hide");
+
+  // export modal
+  $("outDl").onclick=()=>download(outFile,outText);
+  $("outShare").onclick=()=>shareFile({f:outFile,t:outText});
+  $("outCopy").onclick=()=>copyText(outText);
+  $("outClose").onclick=()=>$("out").classList.add("hide");
 
   // backend (admin)
   $("mOk").onclick=checkMath;
@@ -523,37 +726,14 @@ document.addEventListener("DOMContentLoaded",()=>{
   });
 
   // settings
-  $("btnAddParty").onclick=()=>{
-    const n=cleanName($("newParty").value);
-    if(!n)return;
-    if(findParty(n)){toast("Already saved");return;}
-    const s=closestParty(n);
-    if(s&&!confirm(`"${s}" is already saved. Add "${n}" as a separate party anyway?`))return;
-    parties.push(n);saveParties();renderParties();$("newParty").value="";
-  };
-  $("partyList").onclick=e=>{
-    const p=e.target.dataset.rp;
-    if(p&&confirm(`Remove "${p}" from saved parties? (Old orders keep the name.)`)){
-      parties=parties.filter(x=>x!==p);saveParties();renderParties();
-    }
-  };
-  $("btnOrderMode").onclick=()=>{
-    orderMode=!orderMode;updateNav();
-    $("btnOrderMode").textContent=orderMode?"Hide order placing UI":"Show order placing UI";
-  };
   $("btnNet").onclick=()=>{
     showNet=!showNet;
     $("btnNet").textContent=showNet?"Hide Net Rate Bar":"Show Net Rate Bar";
     renderList();
   };
-  $("btnBackup").onclick=backup;
-  $("btnRestore").onclick=()=>$("fileRestore").click();
-  $("fileRestore").onchange=e=>{if(e.target.files[0])restore(e.target.files[0]);e.target.value="";};
-  $("btnWipe").onclick=()=>{
-    if(confirm("Delete ALL your saved orders from this phone? Make a backup first!")&&confirm("Really delete everything?")){
-      orders=[];saveOrders();renderChecks();toast("All orders deleted");
-    }
-  };
 
+  window.addEventListener("online",()=>sync());
+  document.addEventListener("visibilitychange",()=>{if(!document.hidden)sync();});
+  (function loop(){setTimeout(()=>{if(employee)sync();loop();},isAdmin?45000:120000);})();
   if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().catch(()=>{});
 });
