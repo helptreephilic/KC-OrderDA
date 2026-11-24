@@ -550,7 +550,11 @@ async function doLogin(){
   if(!u||!pw)return err("Enter username and password");
   const kv=$("lKey").value.trim();
   if(kv){if(kv.length<20||/\s/.test(kv))return err("That access key is not valid");sSet("ora_key",kv);cfg={r:GH_REPO,t:kv};}
-  if(u===ADMIN_USER){if(H("ora|"+u+"|"+pw)!==ADMIN_H)return err("Wrong password");return start(u,true);}
+  if(u===ADMIN_USER){
+    if(H("ora|"+u+"|"+pw)!==ADMIN_H)return err("Wrong password");
+    if(!cfg)return err("Enter the access key above so the app can save accounts to the data repo");
+    return start(u,true);
+  }
   if(!cfg)return err("First enter the access key from your uncle");
   $("lGo").disabled=true;
   let why="ok";
