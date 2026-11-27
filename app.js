@@ -99,12 +99,25 @@ function mountChips(id,get,set,render){
 /* ===================== PRICES ===================== */
 function savePrices(){
   const m={};
-  products.forEach(p=>m[p.id]={pack:p.pack,mrp:p.mrp,scheme:p.scheme,customK:p.customK});
+  products.forEach(p=>m[p.id]={pack:p.pack,mrp:p.mrp,scheme:p.scheme,customK:p.customK,
+    ...(p.custom?{custom:true,name:p.name,group:p.group}:{})});
   store.prices=m;store.dirty.prc=true;saveStore();syncSoon();
 }
+function sortProducts(){            // keeps each series together, new series go to the end
+  const order=[];products.forEach(p=>{if(!order.includes(p.group))order.push(p.group);});
+  const idx=new Map(products.map((p,i)=>[p,i]));
+  products.sort((a,b)=>order.indexOf(a.group)-order.indexOf(b.group)||idx.get(a)-idx.get(b));
+}
 function applyPrices(){
-  const m=store.prices;
-  if(m)products.forEach(p=>{if(m[p.id])Object.assign(p,m[p.id]);});
+  const m=store.prices;if(!m)return;
+  for(let i=products.length-1;i>=0;i--)          // products removed by the admin disappear everywhere
+    if(products[i].custom&&!(String(products[i].id) in m))products.splice(i,1);
+  Object.keys(m).forEach(k=>{
+    const v=m[k],id=+k;let p=products.find(x=>x.id===id);
+    if(!p&&v.custom){p={id,group:v.group,name:v.name,pack:v.pack,mrp:v.mrp,scheme:v.scheme,qty:0,customK:null,custom:true};products.push(p);}
+    if(p)Object.assign(p,{pack:v.pack,mrp:v.mrp,scheme:v.scheme,customK:v.customK});
+  });
+  sortProducts();
 }
 
 /* ===================== GITHUB SYNC ===================== */
@@ -637,21 +650,37 @@ function showWho(){
 }
 
 /* ===================== ADMIN BACKEND (math check first) ===================== */
-function askMath(){
-  const a=Math.floor(Math.random()*10)+3,b=Math.floor(Math.random()*8)+2,c=Math.floor(Math.random()*12)+1;
-  expected=a*b+c;$("mQ").textContent=`(${a} × ${b}) + ${c} = ?`;
-  $("mA").value="";$("mErr").textContent="";$("math").classList.remove("hide");
-}
-function checkMath(){
-  if(parseInt($("mA").value,10)!==expected){$("mErr").textContent="Incorrect answer!";return;}
-  $("math").classList.add("hide");unlocked=true;tab("back");
-}
 const stat = p=>p.customK!==null?`Manual rate · <a href="#" data-auto="${p.id}">Restore auto</a>`:"Auto-calculated";
 function renderBack(){
   $("backList").innerHTML=products.map(p=>`<div class="panel"><b>${esc(p.name)}</b> <span class="mu">${esc(p.group)}</span>
     <div class="g4">${[["pack","PACK",1],["mrp","MRP ₹",.5],["scheme","Scheme",.01]].map(f=>`<div><label>${f[1]}</label><input class="in" type="number" inputmode="decimal" step="${f[2]}" min="0" value="${p[f[0]]}" data-id="${p.id}" data-f="${f[0]}"></div>`).join("")}
     <div><label>Net Rate (lakh)</label><input class="in" type="number" inputmode="decimal" step="0.000001" id="nk${p.id}" value="${rateOf(p).toFixed(6)}" data-id="${p.id}" data-f="net"></div></div>
-    <div class="mu" id="nm${p.id}">${stat(p)}</div></div>`).join("");
+    <div class="mu" id="nm${p.id}">${stat(p)}</div>
+    ${p.custom?`<button class="btn r sm" data-rm="${p.id}">Remove product</button>`:""}</div>`).join("");
+}
+
+function renderSeriesOpts(){
+  const sel=$("npSeries"),cur=sel.value,gs=[...new Set(products.map(p=>p.group))];
+  sel.innerHTML=gs.map(g=>`<option value="${esc(g)}">${esc(g)}</option>`).join("")+'<option value="__new">➕ New series…</option>';
+  if(cur&&[...sel.options].some(o=>o.value===cur))sel.value=cur;
+  $("npSeriesNew").classList.toggle("hide",sel.value!=="__new");
+}
+function addProduct(){
+  const name=cleanName($("npName").value);
+  let group=$("npSeries").value;if(group==="__new")group=cleanName($("npSeriesNew").value);
+  const pack=parseFloat($("npPack").value),mrp=parseFloat($("npMrp").value);
+  let sc=parseFloat($("npScheme").value);if(isNaN(sc))sc=0;if(sc>1)sc=sc/100;   // 20 or 0.20 both work
+  const netTxt=$("npNet").value.trim(),net=netTxt===""?null:parseFloat(netTxt);
+  if(!name||!group){toast("Enter the product name and the series");return;}
+  if(!(pack>0)||!(mrp>0)){toast("Enter PACK and MRP");return;}
+  if(sc<0||sc>=1){toast("Scheme must be between 0 and 1 (or 1-99 %)");return;}
+  if(net!==null&&!(net>=0)){toast("Net rate is not a valid number");return;}
+  if(products.some(p=>p.group===group&&p.name.toLowerCase()===name.toLowerCase())){toast("That product already exists in this series");return;}
+  if(!confirm(`Add "${name}" to "${group}"?`))return;
+  products.push({id:Date.now(),group,name,pack,mrp,scheme:sc,qty:0,customK:net,custom:true});
+  sortProducts();savePrices();
+  ["npName","npPack","npMrp","npScheme","npNet","npSeriesNew"].forEach(i=>$(i).value="");
+  renderBack();renderSeriesOpts();renderList();toast("✅ Product added");
 }
 
 /* ===================== SETTINGS ===================== */
@@ -686,7 +715,7 @@ function tab(t){
   if(t==="order"){renderOrdFor();renderTP();}
   if(t==="hist")renderHistory();
   if(t==="sum")renderSummary();
-  if(t==="back")renderBack();
+  if(t==="back"){renderBack();renderSeriesOpts();}
   if(t==="set")renderSettings();
   window.scrollTo(0,0);
 }
@@ -762,8 +791,6 @@ document.addEventListener("DOMContentLoaded",()=>{
   $("outClose").onclick=()=>$("out").classList.add("hide");
 
   // backend (admin)
-  $("mOk").onclick=checkMath;
-  $("mCancel").onclick=()=>$("math").classList.add("hide");
   $("backList").addEventListener("input",e=>{
     const f=e.target.dataset.f;if(!f||!isAdmin||!unlocked)return;
     const id=+e.target.dataset.id,p=products.find(x=>x.id===id),n=parseFloat(e.target.value);
@@ -773,9 +800,16 @@ document.addEventListener("DOMContentLoaded",()=>{
     $("nm"+id).innerHTML=stat(p);savePrices();
   });
   $("backList").addEventListener("click",e=>{
-    const id=e.target.dataset.auto;if(!id||!isAdmin||!unlocked)return;
-    e.preventDefault();products.find(x=>x.id===+id).customK=null;savePrices();renderBack();
+    if(!isAdmin||!unlocked)return;
+    const id=e.target.dataset.auto,rm=e.target.dataset.rm;
+    if(id){e.preventDefault();products.find(x=>x.id===+id).customK=null;savePrices();renderBack();}
+    else if(rm&&confirm("Remove this product? Old orders keep their saved prices.")){
+      products.splice(products.findIndex(x=>x.id===+rm),1);
+      savePrices();renderBack();renderSeriesOpts();renderList();
+    }
   });
+  $("npSeries").onchange=()=>$("npSeriesNew").classList.toggle("hide",$("npSeries").value!=="__new");
+  $("btnAddProduct").onclick=addProduct;
 
   // settings
   $("btnNet").onclick=()=>{
