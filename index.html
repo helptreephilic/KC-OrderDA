@@ -4,13 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Order & Rate Automation</title>
+<meta name="theme-color" content="#da291c">
+<script>try{document.documentElement.dataset.theme=JSON.parse(localStorage.getItem("ora_theme"))||"huggies"}catch(e){document.documentElement.dataset.theme="huggies"}</script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <header>
   <button id="btnOut" class="hide">Log out</button>
-  <h1>Order & Rate Automation</h1><small id="who"></small><small id="syncInfo"></small>
+  <div class="brand"><img class="logo" src="huggies-logo.png" alt="Huggies"><h1>Order & Rate Automation</h1></div><small id="who"></small><small id="syncInfo"></small>
   <nav>
     <button data-t="emps" class="hide">👥 Employees</button>
     <button data-t="order">🛒 Order</button>
@@ -129,6 +131,15 @@
     </div>
 
     <div class="panel">
+      <h3>Theme</h3>
+      <select class="in" id="themeSel" style="margin:0">
+        <option value="huggies">Huggies (red)</option>
+        <option value="minimal">Minimal</option>
+        <option value="dark">Dark</option>
+      </select>
+    </div>
+
+    <div class="panel">
       <h3>Sync</h3>
       <p id="syncLine" style="margin:0 0 8px;font-size:13px"></p>
     </div>
@@ -152,6 +163,7 @@
 
 <!-- Login -->
 <div class="login hide" id="login"><div class="box">
+  <div class="hero"><img src="huggies-hero.png" alt="We are Huggies"></div>
   <h2 id="lTitle"></h2>
   <div id="lUserWrap"><label>Username</label><input class="in" id="lUser" autocapitalize="none" autocomplete="username"></div>
   <div id="lPassWrap"><label>Password</label><input class="in" type="password" id="lPass" autocomplete="current-password"></div>
@@ -199,9 +211,9 @@
 <div class="sheet hide" id="sheet">
   <div class="top"><b>Order details</b><button class="btn l sm" id="btnSheetClose" style="margin:0">✕ Close</button></div>
   <div class="panel big">
-    <div class="mu" style="color:#a5b4fc">TOTAL AMOUNT</div>
+    <div class="lbl">TOTAL AMOUNT</div>
     <div id="sLakhs" style="font-size:24px;font-weight:800">0.000000</div>
-    <div id="sRs" style="font-size:12px;color:#6ee7b7">₹0.00</div>
+    <div id="sRs" class="rs">₹0.00</div>
   </div>
   <h4>SERIES BREAKDOWN</h4><div id="sSeries"></div>
   <h4>ORDERED ITEMS BREAKDOWN</h4><div id="sItems"></div>
