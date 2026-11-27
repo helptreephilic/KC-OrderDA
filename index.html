@@ -103,6 +103,21 @@
   <!-- BACKEND (admin, math check) -->
   <section id="tab-back" class="hide">
     <div class="panel mu">Changes save on this phone and are sent to everyone's app when you are online. Net Rate is auto-calculated from PACK, MRP and Scheme unless you type a manual rate.</div>
+    <div class="panel">
+      <h3>Add new product</h3>
+      <label>Product name</label>
+      <input class="in" id="npName" placeholder="e.g. M45">
+      <label>Series</label>
+      <select class="in" id="npSeries"></select>
+      <input class="in hide" id="npSeriesNew" placeholder="New series name">
+      <div class="g4">
+        <div><label>PACK</label><input class="in" type="number" inputmode="decimal" id="npPack" min="0"></div>
+        <div><label>MRP ₹</label><input class="in" type="number" inputmode="decimal" id="npMrp" min="0" step="0.5"></div>
+        <div><label>Scheme (0.20 or 20)</label><input class="in" type="number" inputmode="decimal" id="npScheme" min="0" step="0.01"></div>
+        <div><label>Net Rate (lakh), optional</label><input class="in" type="number" inputmode="decimal" id="npNet" min="0" step="0.000001" placeholder="auto"></div>
+      </div>
+      <button class="btn g" id="btnAddProduct">+ Add product</button>
+    </div>
     <div id="backList"></div>
   </section>
 
@@ -146,16 +161,6 @@
   <button class="btn" id="lGo" style="width:100%"></button>
   <p class="c" style="font-size:13px;margin:12px 0 0"><a href="#" id="lLink1"></a></p>
   <p class="c" style="font-size:13px;margin:6px 0 0"><a href="#" id="lLink2">Not you? Use another account</a></p>
-</div></div>
-
-<!-- Math check -->
-<div class="login modal hide" id="math"><div class="box">
-  <h3>Human check</h3>
-  <p class="mu" style="margin:0 0 10px">Solve this to open Backend editing:</p>
-  <div class="q-math" id="mQ"></div>
-  <input class="in c" type="number" inputmode="numeric" id="mA" placeholder="Answer">
-  <p class="err" id="mErr"></p>
-  <div class="btns"><button class="btn l" id="mCancel">Cancel</button><button class="btn" id="mOk">Verify</button></div>
 </div></div>
 
 <!-- Export / share fallback -->
