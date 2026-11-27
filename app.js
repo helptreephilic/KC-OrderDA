@@ -669,7 +669,10 @@ function renderSettings(){
 /* ===================== TABS ===================== */
 function tab(t){
   if(t==="back"&&!isAdmin)return;
-  if(t==="back"&&!unlocked){askMath();return;}
+  if(t==="back"&&!unlocked){
+    if(!confirm("Open Backend? Changes here change prices for everyone."))return;
+    unlocked=true;
+  }
   if(t!=="back")unlocked=false;
   curTab=t;
   ["emps","emp","order","hist","sum","back","set"].forEach(x=>$("tab-"+x).classList.toggle("hide",x!==t));
