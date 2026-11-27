@@ -720,8 +720,19 @@ function tab(t){
   window.scrollTo(0,0);
 }
 
+/* ===================== THEME ===================== */
+const THEMES={huggies:"#da291c",minimal:"#0f172a",dark:"#171b22"};
+function applyTheme(t){
+  if(!THEMES[t])t="huggies";
+  document.documentElement.dataset.theme=t;
+  const m=document.querySelector('meta[name=theme-color]');if(m)m.content=THEMES[t];
+  return t;
+}
+
 /* ===================== EVENTS ===================== */
 document.addEventListener("DOMContentLoaded",()=>{
+  const th=applyTheme(sGet("ora_theme","huggies"));$("themeSel").value=th;
+  $("themeSel").onchange=()=>{sSet("ora_theme",applyTheme($("themeSel").value));};
   applyPrices();initLogin();
   document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>tab(b.dataset.t));
 
